@@ -159,7 +159,7 @@ class UniformRandomCategories(QueryPattern):
         
         for i in range(num_queries):
             vector_idx = i % num_available
-            yield query_vectors[vector_idx], categories[i]
+            yield query_vectors[vector_idx], int(categories[i])
 
 
 class ZipfianDistribution(QueryPattern):
@@ -200,7 +200,7 @@ class ZipfianDistribution(QueryPattern):
 
         for i in range(num_queries):
             vector_idx = i % num_available
-            yield query_vectors[vector_idx], categories[i]
+            yield query_vectors[vector_idx], int(categories[i])
 
 
 def get_all_patterns(config) -> List[QueryPattern]:

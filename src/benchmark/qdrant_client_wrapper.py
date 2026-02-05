@@ -133,9 +133,9 @@ class ScenarioA:
         """Search with category filter."""
         start = time.perf_counter()
 
-        results = self.client.search(
+        response = self.client.query_points(
             collection_name=self.COLLECTION_NAME,
-            query_vector=query_vector,
+            query=query_vector,
             query_filter=models.Filter(
                 must=[
                     models.FieldCondition(
@@ -155,7 +155,7 @@ class ScenarioA:
             query_id=query_id,
             category_id=category_id,
             duration_seconds=duration,
-            results=[hit.id for hit in results],
+            results=[point.id for point in response.points],
         )
 
     def get_collection_info(self) -> Dict:
@@ -262,9 +262,9 @@ class ScenarioB:
         start = time.perf_counter()
 
         name = self._collection_name(category_id)
-        results = self.client.search(
+        response = self.client.query_points(
             collection_name=name,
-            query_vector=query_vector,
+            query=query_vector,
             limit=self.config.search.top_k,
             search_params=models.SearchParams(
                 hnsw_ef=self.config.hnsw.ef_search,
@@ -276,7 +276,7 @@ class ScenarioB:
             query_id=query_id,
             category_id=category_id,
             duration_seconds=duration,
-            results=[hit.id for hit in results],
+            results=[point.id for point in response.points],
         )
 
     def get_collection_info(self, category_id: int) -> Dict:
@@ -377,9 +377,9 @@ class BaselineScenario:
         """Search without filtering."""
         start = time.perf_counter()
 
-        results = self.client.search(
+        response = self.client.query_points(
             collection_name=self.COLLECTION_NAME,
-            query_vector=query_vector,
+            query=query_vector,
             limit=self.config.search.top_k,
             search_params=models.SearchParams(
                 hnsw_ef=self.config.hnsw.ef_search,
@@ -391,7 +391,7 @@ class BaselineScenario:
             query_id=query_id,
             category_id=-1,  # No category for baseline
             duration_seconds=duration,
-            results=[hit.id for hit in results],
+            results=[point.id for point in response.points],
         )
 
     def get_collection_info(self) -> Dict:

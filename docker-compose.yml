@@ -1,6 +1,6 @@
 services:
   qdrant:
-    image: qdrant/qdrant:v1.7.4
+    image: qdrant/qdrant:v1.16.0
     container_name: qdrant-benchmark
     ports:
       - "6333:6333"
