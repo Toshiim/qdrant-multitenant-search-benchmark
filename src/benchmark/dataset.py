@@ -176,9 +176,7 @@ def assign_categories(
         return np.random.randint(0, num_categories, size=num_vectors)
     elif distribution == "zipfian":
         # Zipfian distribution - some categories have more vectors
-        from scipy.stats import zipf
-        
-        # Generate zipfian weights
+        # Generate zipfian weights manually
         alpha = 1.5
         weights = np.array([1.0 / (i ** alpha) for i in range(1, num_categories + 1)])
         weights = weights / weights.sum()

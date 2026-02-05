@@ -211,8 +211,10 @@ def plot_scaling_analysis(df: pd.DataFrame, output_dir: str = "./results"):
     df_pattern = df[df["test_name"] == test_name]
     
     if len(df_pattern) == 0:
-        df_pattern = df[df["test_name"] == df["test_name"].iloc[0]]
+        if len(df) == 0:
+            return
         test_name = df["test_name"].iloc[0]
+        df_pattern = df[df["test_name"] == test_name]
     
     scenario_a = df_pattern[df_pattern["scenario"] == "A"]
     scenario_b = df_pattern[df_pattern["scenario"] == "B"]

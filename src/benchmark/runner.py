@@ -339,8 +339,14 @@ class BenchmarkRunner:
 
         # Run baseline
         if include_baseline:
-            # Use uniform random pattern for baseline
-            baseline_pattern = patterns[3] if len(patterns) > 3 else patterns[0]
+            # Use uniform random pattern for baseline (find by name, fallback to first)
+            baseline_pattern = None
+            for p in patterns:
+                if p.name == "uniform_random":
+                    baseline_pattern = p
+                    break
+            if baseline_pattern is None:
+                baseline_pattern = patterns[0]
             result = self.run_baseline(baseline_pattern)
             all_results.append(result)
 
