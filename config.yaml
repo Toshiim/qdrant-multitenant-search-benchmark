@@ -1,0 +1,72 @@
+# Benchmark configuration file
+
+qdrant:
+  host: "localhost"
+  port: 6333
+  grpc_port: 6334
+  timeout: 300  # seconds
+
+# HNSW index parameters
+hnsw:
+  m: 16
+  ef_construct: 100
+  ef_search: 64
+
+# Search parameters
+search:
+  top_k: 10
+  distance_metric: "Cosine"  # Cosine, Euclidean, Dot
+
+# Category configuration
+categories:
+  counts: [10, 100, 1000]  # Number of categories to test
+
+# Dataset configuration
+dataset:
+  # Available datasets:
+  # - dbpedia-openai-1M-angular (1M vectors, 1536 dims, cosine)
+  # - deep-image-96-angular (10M vectors, 96 dims, cosine)
+  # - gist-960-euclidean (1M vectors, 960 dims, euclidean)
+  # - glove-100-angular (1.2M vectors, 100 dims, cosine)
+  # - synthetic (generated vectors for testing)
+  name: "synthetic"
+  synthetic:
+    num_vectors: 100000
+    dimensions: 128
+    distance: "Cosine"
+
+# Benchmark parameters
+benchmark:
+  # Number of queries per test
+  num_queries: 1000
+  # Batch size for inserts
+  batch_size: 100
+  # Number of warm-up queries before measurement
+  warmup_queries: 100
+  # Number of times to repeat each test
+  repeat: 3
+
+# Query pattern specific settings
+query_patterns:
+  # Hot Category Loop
+  hot_category:
+    category_index: 0  # Which category to use (0 = first)
+  
+  # Category Batch Sweep
+  batch_sweep:
+    queries_per_category: 100
+  
+  # Zipfian Distribution
+  zipfian:
+    alpha: 1.0  # Shape parameter (higher = more skewed)
+
+# Resource monitoring
+monitoring:
+  enabled: true
+  interval_seconds: 1
+
+# Output configuration
+output:
+  results_dir: "./results"
+  save_raw_metrics: true
+  generate_plots: true
