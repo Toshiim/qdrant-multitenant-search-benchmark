@@ -102,16 +102,16 @@ def generate_synthetic_dataset(
     distance: str = "Cosine",
     seed: int = 42,
 ) -> Dataset:
-    """Generate synthetic random dataset."""
+    """Generate synthetic random dataset.
+    
+    Note: Vectors are NOT normalized for Cosine distance because Qdrant
+    automatically normalizes vectors internally when using Cosine distance.
+    Pre-normalization would be redundant.
+    """
     np.random.seed(seed)
     
     vectors = np.random.randn(num_vectors, dimensions).astype(np.float32)
     queries = np.random.randn(num_queries, dimensions).astype(np.float32)
-    
-    # Normalize for cosine similarity
-    if distance == "Cosine":
-        vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-        queries = queries / np.linalg.norm(queries, axis=1, keepdims=True)
     
     return Dataset(
         name=f"synthetic-{num_vectors}-{dimensions}",

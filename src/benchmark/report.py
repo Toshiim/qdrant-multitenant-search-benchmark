@@ -206,7 +206,7 @@ def plot_scaling_analysis(df: pd.DataFrame, output_dir: str = "./results"):
     """Generate scaling analysis plots."""
     os.makedirs(output_dir, exist_ok=True)
     
-    # Get one pattern for clean scaling view
+    # Get one pattern for clean scaling view (prefer uniform_random as representative)
     test_name = "uniform_random"
     df_pattern = df[df["test_name"] == test_name]
     
@@ -284,8 +284,243 @@ def plot_scaling_analysis(df: pd.DataFrame, output_dir: str = "./results"):
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "scaling_analysis.png"), dpi=150)
     plt.close()
-    
     print("Saved plot: scaling_analysis.png")
+
+
+def plot_ram_comparison(df: pd.DataFrame, output_dir: str = "./results"):
+    """Generate RAM usage comparison plot."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Filter out baseline and insert tests for cleaner comparison
+    df_filtered = df[(df["num_categories"] > 0) & (df["test_name"] != "insert")]
+    
+    if len(df_filtered) == 0:
+        return
+    
+    # Get a representative pattern (prefer uniform_random as it's most common)
+    test_names = df_filtered["test_name"].unique()
+    if len(test_names) == 0:
+        return
+    
+    test_name = "uniform_random" if "uniform_random" in test_names else test_names[0]
+    df_pattern = df_filtered[df_filtered["test_name"] == test_name]
+    
+    scenario_a = df_pattern[df_pattern["scenario"] == "A"]
+    scenario_b = df_pattern[df_pattern["scenario"] == "B"]
+    
+    if len(scenario_a) == 0 or len(scenario_b) == 0:
+        return
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    a_data = scenario_a.groupby("num_categories")["ram_mb"].mean()
+    b_data = scenario_b.groupby("num_categories")["ram_mb"].mean()
+    
+    x = np.arange(len(a_data))
+    width = 0.35
+    
+    ax.bar(x - width/2, a_data.values, width, label="Scenario A (single collection)", color="steelblue")
+    ax.bar(x + width/2, b_data.values, width, label="Scenario B (multi collection)", color="coral")
+    
+    ax.set_xlabel("Number of Categories")
+    ax.set_ylabel("RAM Usage (MB)")
+    ax.set_title(f"RAM Usage Comparison ({test_name})")
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(int(c)) for c in a_data.index])
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "ram_comparison.png"), dpi=150)
+    plt.close()
+    
+    print("Saved plot: ram_comparison.png")
+
+
+def plot_insert_throughput_comparison(df: pd.DataFrame, output_dir: str = "./results"):
+    """Generate insert throughput comparison plot."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Filter to insert tests only
+    df_insert = df[df["test_name"] == "insert"]
+    
+    if len(df_insert) == 0:
+        return
+    
+    scenario_a = df_insert[df_insert["scenario"] == "A"]
+    scenario_b = df_insert[df_insert["scenario"] == "B"]
+    
+    if len(scenario_a) == 0 or len(scenario_b) == 0:
+        return
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Throughput comparison
+    a_throughput = scenario_a.groupby("num_categories")["insert_throughput"].mean()
+    b_throughput = scenario_b.groupby("num_categories")["insert_throughput"].mean()
+    
+    x = np.arange(len(a_throughput))
+    width = 0.35
+    
+    ax1.bar(x - width/2, a_throughput.values, width, label="Scenario A", color="steelblue")
+    ax1.bar(x + width/2, b_throughput.values, width, label="Scenario B", color="coral")
+    ax1.set_xlabel("Number of Categories")
+    ax1.set_ylabel("Vectors Per Second")
+    ax1.set_title("Insert Throughput Comparison")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([str(int(c)) for c in a_throughput.index])
+    ax1.legend()
+    ax1.grid(axis="y", alpha=0.3)
+    
+    # Insert latency P50 comparison
+    a_latency = scenario_a.groupby("num_categories")["insert_p50_ms"].mean()
+    b_latency = scenario_b.groupby("num_categories")["insert_p50_ms"].mean()
+    
+    ax2.bar(x - width/2, a_latency.values, width, label="Scenario A", color="steelblue")
+    ax2.bar(x + width/2, b_latency.values, width, label="Scenario B", color="coral")
+    ax2.set_xlabel("Number of Categories")
+    ax2.set_ylabel("Insert Latency P50 (ms)")
+    ax2.set_title("Insert Latency P50 Comparison")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([str(int(c)) for c in a_latency.index])
+    ax2.legend()
+    ax2.grid(axis="y", alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "insert_comparison.png"), dpi=150)
+    plt.close()
+    
+    print("Saved plot: insert_comparison.png")
+
+
+def plot_latency_percentiles(df: pd.DataFrame, output_dir: str = "./results"):
+    """Generate latency percentiles comparison (P50, P95) for all scenarios."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Filter out insert tests
+    df_search = df[df["test_name"] != "insert"]
+    
+    if len(df_search) == 0:
+        return
+    
+    # Get middle category count
+    category_counts = df_search["num_categories"].unique()
+    category_counts = [c for c in category_counts if c > 0]
+    
+    if not category_counts:
+        return
+    
+    target_cats = sorted(category_counts)[len(category_counts) // 2]
+    df_filtered = df_search[df_search["num_categories"] == target_cats]
+    
+    test_names = df_filtered["test_name"].unique()
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    
+    x = np.arange(len(test_names))
+    width = 0.35
+    
+    # P50 comparison
+    a_p50 = []
+    b_p50 = []
+    for name in test_names:
+        test_df = df_filtered[df_filtered["test_name"] == name]
+        a_p50.append(test_df[test_df["scenario"] == "A"]["search_p50_ms"].mean())
+        b_p50.append(test_df[test_df["scenario"] == "B"]["search_p50_ms"].mean())
+    
+    ax1.bar(x - width/2, a_p50, width, label="Scenario A", color="steelblue")
+    ax1.bar(x + width/2, b_p50, width, label="Scenario B", color="coral")
+    ax1.set_xlabel("Query Pattern")
+    ax1.set_ylabel("Latency P50 (ms)")
+    ax1.set_title(f"Search Latency P50 ({int(target_cats)} categories)")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(test_names, rotation=45, ha="right")
+    ax1.legend()
+    ax1.grid(axis="y", alpha=0.3)
+    
+    # P95 comparison
+    a_p95 = []
+    b_p95 = []
+    for name in test_names:
+        test_df = df_filtered[df_filtered["test_name"] == name]
+        a_p95.append(test_df[test_df["scenario"] == "A"]["search_p95_ms"].mean())
+        b_p95.append(test_df[test_df["scenario"] == "B"]["search_p95_ms"].mean())
+    
+    ax2.bar(x - width/2, a_p95, width, label="Scenario A", color="steelblue")
+    ax2.bar(x + width/2, b_p95, width, label="Scenario B", color="coral")
+    ax2.set_xlabel("Query Pattern")
+    ax2.set_ylabel("Latency P95 (ms)")
+    ax2.set_title(f"Search Latency P95 ({int(target_cats)} categories)")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(test_names, rotation=45, ha="right")
+    ax2.legend()
+    ax2.grid(axis="y", alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "latency_percentiles.png"), dpi=150)
+    plt.close()
+    
+    print("Saved plot: latency_percentiles.png")
+
+
+def plot_performance_ratio(df: pd.DataFrame, output_dir: str = "./results"):
+    """Generate performance ratio plot (Scenario B / Scenario A).
+    
+    Values > 1.0 mean Scenario B is slower than A (A performs better).
+    Values < 1.0 mean Scenario B is faster than A (B performs better).
+    Value = 1.0 means equal performance.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Filter out insert tests
+    df_search = df[df["test_name"] != "insert"]
+    
+    if len(df_search) == 0:
+        return
+    
+    # Get unique test names and category counts
+    test_names = df_search["test_name"].unique()
+    category_counts = sorted([c for c in df_search["num_categories"].unique() if c > 0])
+    
+    if len(test_names) == 0 or len(category_counts) == 0:
+        return
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Calculate ratio for each test pattern
+    x = np.arange(len(test_names))
+    width = 0.15
+    
+    for i, cat_count in enumerate(category_counts):
+        ratios = []
+        for test_name in test_names:
+            test_df = df_search[(df_search["test_name"] == test_name) & (df_search["num_categories"] == cat_count)]
+            a_latency = test_df[test_df["scenario"] == "A"]["search_p50_ms"].mean()
+            b_latency = test_df[test_df["scenario"] == "B"]["search_p50_ms"].mean()
+            
+            if a_latency > 0:
+                ratio = b_latency / a_latency
+            else:
+                ratio = 1.0
+            ratios.append(ratio)
+        
+        offset = (i - len(category_counts)/2 + 0.5) * width
+        ax.bar(x + offset, ratios, width, label=f"{int(cat_count)} categories")
+    
+    ax.axhline(y=1.0, color='red', linestyle='--', linewidth=1.5, label='Equal performance')
+    ax.set_xlabel("Query Pattern")
+    ax.set_ylabel("Performance Ratio (Scenario B / Scenario A)")
+    ax.set_title("Performance Ratio: Scenario B vs A\n(Higher = Scenario A is better, Lower = Scenario B is better)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(test_names, rotation=45, ha="right")
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "performance_ratio.png"), dpi=150)
+    plt.close()
+    
+    print("Saved plot: performance_ratio.png")
 
 
 def generate_markdown_report(results: Dict, output_path: str):
@@ -375,6 +610,12 @@ def generate_full_report(results_path: str, output_dir: str = "./results"):
     plot_latency_comparison(df, output_dir)
     plot_all_patterns_comparison(df, output_dir)
     plot_scaling_analysis(df, output_dir)
+    
+    # Generate new plots
+    plot_ram_comparison(df, output_dir)
+    plot_insert_throughput_comparison(df, output_dir)
+    plot_latency_percentiles(df, output_dir)
+    plot_performance_ratio(df, output_dir)
     
     # Generate markdown report
     generate_markdown_report(results, os.path.join(output_dir, "RESULTS.md"))

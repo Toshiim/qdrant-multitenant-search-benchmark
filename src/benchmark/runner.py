@@ -401,6 +401,9 @@ class BenchmarkRunner:
 
         all_results: List[TestMetrics] = []
         timestamp = time.strftime("%Y%m%d_%H%M%S")
+        
+        # Store insert metrics per scenario and category count
+        insert_metrics_cache: Dict[str, InsertMetrics] = {}
 
         # Run baseline
         if include_baseline:
@@ -446,6 +449,10 @@ class BenchmarkRunner:
                 )
                 insert_metrics_a = insert_collector.compute_insert_metrics(setup_time_a)
                 
+                # Cache insert metrics for this scenario and category count
+                cache_key = f"A_{num_categories}"
+                insert_metrics_cache[cache_key] = insert_metrics_a
+                
                 # Record insert test result
                 all_results.append(TestMetrics(
                     test_name="insert",
@@ -471,7 +478,6 @@ class BenchmarkRunner:
                 
                 # Step 3: Run all search patterns
                 print("\n[3/3] Search Tests (Scenario A)")
-                empty_insert_metrics = self._create_empty_insert_metrics()
                 for pattern in patterns:
                     for repeat_idx in range(self.config.benchmark.repeat):
                         print(f"\n  Running {pattern.name} (repeat {repeat_idx + 1}/{self.config.benchmark.repeat})")
@@ -488,11 +494,12 @@ class BenchmarkRunner:
                             self.config.search.top_k,
                         )
                         
+                        # Use cached insert metrics for search tests
                         all_results.append(TestMetrics(
                             test_name=pattern.name,
                             scenario="A",
                             num_categories=num_categories,
-                            insert_metrics=empty_insert_metrics,
+                            insert_metrics=insert_metrics_a,
                             search_metrics=search_metrics,
                             resource_metrics=search_collector.get_latest_resource_metrics(),
                             setup_time_seconds=0,
@@ -520,6 +527,10 @@ class BenchmarkRunner:
                 )
                 insert_metrics_b = insert_collector.compute_insert_metrics(setup_time_b)
                 
+                # Cache insert metrics for this scenario and category count
+                cache_key = f"B_{num_categories}"
+                insert_metrics_cache[cache_key] = insert_metrics_b
+                
                 # Record insert test result
                 all_results.append(TestMetrics(
                     test_name="insert",
@@ -545,7 +556,6 @@ class BenchmarkRunner:
                 
                 # Step 3: Run all search patterns
                 print("\n[3/3] Search Tests (Scenario B)")
-                empty_insert_metrics = self._create_empty_insert_metrics()
                 for pattern in patterns:
                     for repeat_idx in range(self.config.benchmark.repeat):
                         print(f"\n  Running {pattern.name} (repeat {repeat_idx + 1}/{self.config.benchmark.repeat})")
@@ -562,11 +572,12 @@ class BenchmarkRunner:
                             self.config.search.top_k,
                         )
                         
+                        # Use cached insert metrics for search tests
                         all_results.append(TestMetrics(
                             test_name=pattern.name,
                             scenario="B",
                             num_categories=num_categories,
-                            insert_metrics=empty_insert_metrics,
+                            insert_metrics=insert_metrics_b,
                             search_metrics=search_metrics,
                             resource_metrics=search_collector.get_latest_resource_metrics(),
                             setup_time_seconds=0,

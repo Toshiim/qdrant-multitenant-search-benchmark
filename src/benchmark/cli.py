@@ -157,13 +157,16 @@ def cmd_run(args):
     )
 
     # Save results
-    os.makedirs(args.output, exist_ok=True)
-    results_path = os.path.join(args.output, f"benchmark_{result.timestamp}.json")
+    # Create timestamped folder: Result/{test_name}_{timestamp}/
+    result_folder = os.path.join("Result", f"benchmark_{result.timestamp}")
+    os.makedirs(result_folder, exist_ok=True)
+    
+    results_path = os.path.join(result_folder, "benchmark_results.json")
     result.save(results_path)
     print(f"\n\nResults saved to: {results_path}")
 
-    # Generate report
-    generate_full_report(results_path, args.output)
+    # Generate report in the same folder
+    generate_full_report(results_path, result_folder)
 
     print("\n" + "="*60)
     print("Benchmark complete!")
