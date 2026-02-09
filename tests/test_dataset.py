@@ -31,17 +31,22 @@ class TestGenerateSyntheticDataset:
         assert dataset.dimensions == 64
         assert dataset.distance == "Cosine"
 
-    def test_cosine_normalization(self):
-        """Test vectors are normalized for cosine distance."""
+    def test_cosine_no_prenormalization(self):
+        """Test vectors are NOT normalized for cosine distance.
+        
+        Qdrant automatically normalizes vectors internally when using
+        Cosine distance, so pre-normalization is redundant.
+        """
         dataset = generate_synthetic_dataset(
             num_vectors=100,
             dimensions=32,
             distance="Cosine",
         )
         
-        # Check that vectors are normalized (L2 norm ≈ 1)
+        # Check that vectors are NOT pre-normalized (L2 norm varies)
         norms = np.linalg.norm(dataset.vectors, axis=1)
-        np.testing.assert_array_almost_equal(norms, np.ones(100), decimal=5)
+        # Not all vectors should have norm of 1 (they're random)
+        assert not np.allclose(norms, np.ones(100))
 
     def test_euclidean_not_normalized(self):
         """Test vectors are not normalized for euclidean distance."""

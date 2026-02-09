@@ -60,7 +60,7 @@ def load_dataset(config: Config, data_dir: str = "./data") -> Dataset:
 For synthetic datasets:
 
 1. **Vector Generation**: Uses `numpy.random.randn()` to generate random vectors
-2. **Normalization**: If using Cosine distance, vectors are normalized to unit length
+2. **No Pre-normalization**: Vectors are NOT normalized because Qdrant automatically normalizes vectors internally when using Cosine distance
 3. **Queries**: Generates separate query vectors using the same process
 
 ```python
@@ -70,12 +70,13 @@ def generate_synthetic_dataset(num_vectors, dimensions, num_queries, distance, s
     vectors = np.random.randn(num_vectors, dimensions).astype(np.float32)
     queries = np.random.randn(num_queries, dimensions).astype(np.float32)
     
-    if distance == "Cosine":
-        vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-        queries = queries / np.linalg.norm(queries, axis=1, keepdims=True)
+    # Note: No normalization needed for Cosine distance
+    # Qdrant handles normalization internally
     
     return Dataset(...)
 ```
+
+**Important**: Qdrant automatically normalizes vectors when using `Distance.COSINE`, so pre-normalizing vectors would be redundant and waste computation time. The benchmark sends raw vectors to Qdrant for more accurate performance measurements.
 
 ### 4. Standard Dataset Loading
 
