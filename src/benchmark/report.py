@@ -466,8 +466,9 @@ def plot_latency_percentiles(df: pd.DataFrame, output_dir: str = "./results"):
 def plot_performance_ratio(df: pd.DataFrame, output_dir: str = "./results"):
     """Generate performance ratio plot (Scenario B / Scenario A).
     
-    Values > 1.0 mean Scenario B is slower (worse).
-    Values < 1.0 mean Scenario B is faster (better).
+    Values > 1.0 mean Scenario B is slower than A (A performs better).
+    Values < 1.0 mean Scenario B is faster than A (B performs better).
+    Value = 1.0 means equal performance.
     """
     os.makedirs(output_dir, exist_ok=True)
     

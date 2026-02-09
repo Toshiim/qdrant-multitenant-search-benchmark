@@ -185,7 +185,10 @@ This yields tuples of `(vectors, ids, category_ids)` for efficient batch inserti
 
 All datasets are downloaded from ann-benchmarks.com (using HTTP URLs as provided by the benchmark dataset repository)
 
-**Note**: The dataset URLs use HTTP protocol as provided by the ann-benchmarks repository. Downloads are for publicly available benchmark datasets.
+**Security Note**: The dataset URLs currently use HTTP protocol as provided by the ann-benchmarks repository. Downloads are for publicly available benchmark datasets. For production use, consider:
+1. Verifying dataset integrity using checksums after download
+2. Downloading datasets once and storing them in a trusted location
+3. Using a local mirror with HTTPS support
 
 ## Usage in Benchmark
 
