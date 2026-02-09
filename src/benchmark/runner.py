@@ -4,16 +4,19 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 from tqdm import tqdm
 
 from .config import Config
 from .dataset import Dataset, assign_categories, batch_vectors
-from .metrics import MetricsCollector, TestMetrics
+from .metrics import MetricsCollector, TestMetrics, InsertMetrics, SearchMetrics, ResourceMetrics, LatencyMetrics, ThroughputMetrics
 from .qdrant_client_wrapper import BaselineScenario, ScenarioA, ScenarioB
 from .query_patterns import QueryPattern, get_all_patterns
+
+# Type alias for any scenario type
+ScenarioType = Union[ScenarioA, ScenarioB, BaselineScenario]
 
 
 @dataclass
@@ -136,27 +139,51 @@ class BenchmarkRunner:
 
         return setup_time
 
-    def _run_search_pattern(
+    def _run_warmup(
         self,
-        scenario,
-        pattern: QueryPattern,
+        scenario: ScenarioType,
         num_categories: int,
-        collector: MetricsCollector,
-    ):
-        """Run search queries according to pattern."""
-        # Warmup
-        warmup_gen = pattern.generate_queries(
+    ) -> float:
+        """Run warmup queries to warm up indexes before search tests.
+        
+        Returns:
+            Duration of warmup in seconds.
+        """
+        print(f"  Running warmup ({self.config.benchmark.warmup_queries} queries)...")
+        start_time = time.perf_counter()
+        
+        # Use uniform distribution for warmup to touch all categories
+        from .query_patterns import UniformRandomCategories
+        warmup_pattern = UniformRandomCategories(seed=0)
+        
+        warmup_gen = warmup_pattern.generate_queries(
             self.dataset.queries,
             num_categories,
             self.config.benchmark.warmup_queries,
         )
-        for query_vec, cat_id in warmup_gen:
-            if hasattr(scenario, "search"):
-                if isinstance(scenario, BaselineScenario):
-                    scenario.search(query_vec.tolist())
-                else:
-                    scenario.search(query_vec.tolist(), cat_id)
+        
+        for query_vec, cat_id in tqdm(
+            warmup_gen,
+            desc="Warmup",
+            total=self.config.benchmark.warmup_queries,
+        ):
+            if isinstance(scenario, BaselineScenario):
+                scenario.search(query_vec.tolist())
+            else:
+                scenario.search(query_vec.tolist(), cat_id)
+        
+        duration = time.perf_counter() - start_time
+        print(f"  Warmup completed in {duration:.2f}s")
+        return duration
 
+    def _run_search_pattern(
+        self,
+        scenario: ScenarioType,
+        pattern: QueryPattern,
+        num_categories: int,
+        collector: MetricsCollector,
+    ):
+        """Run search queries according to pattern (without warmup)."""
         # Actual measurement
         query_gen = pattern.generate_queries(
             self.dataset.queries,
@@ -182,7 +209,7 @@ class BenchmarkRunner:
         num_categories: int,
         category_ids: np.ndarray,
     ) -> TestMetrics:
-        """Run benchmark for Scenario A."""
+        """Run benchmark for Scenario A (legacy method for backwards compatibility)."""
         print(f"\n=== Running Scenario A: {pattern.name} ({num_categories} categories) ===")
         
         scenario = ScenarioA(self.config)
@@ -199,6 +226,9 @@ class BenchmarkRunner:
             )
             index_build_time = setup_time
             insert_metrics = collector.compute_insert_metrics(index_build_time)
+
+            # Warmup phase
+            self._run_warmup(scenario, num_categories)
 
             # Search phase
             collector.reset()
@@ -232,7 +262,7 @@ class BenchmarkRunner:
         num_categories: int,
         category_ids: np.ndarray,
     ) -> TestMetrics:
-        """Run benchmark for Scenario B."""
+        """Run benchmark for Scenario B (legacy method for backwards compatibility)."""
         print(f"\n=== Running Scenario B: {pattern.name} ({num_categories} categories) ===")
         
         scenario = ScenarioB(self.config)
@@ -250,6 +280,9 @@ class BenchmarkRunner:
             )
             index_build_time = setup_time
             insert_metrics = collector.compute_insert_metrics(index_build_time)
+
+            # Warmup phase
+            self._run_warmup(scenario, num_categories)
 
             # Search phase
             collector.reset()
@@ -295,6 +328,9 @@ class BenchmarkRunner:
             index_build_time = setup_time
             insert_metrics = collector.compute_insert_metrics(index_build_time)
 
+            # Warmup phase
+            self._run_warmup(scenario, 1)
+
             # Search phase
             collector.reset()
             collector.start()
@@ -321,13 +357,42 @@ class BenchmarkRunner:
         finally:
             scenario.cleanup()
 
+    def _create_empty_insert_metrics(self) -> InsertMetrics:
+        """Create empty insert metrics for search-only tests."""
+        return InsertMetrics(
+            latency=LatencyMetrics(
+                count=0, total_seconds=0, mean_ms=0, p50_ms=0,
+                p95_ms=0, p99_ms=0, min_ms=0, max_ms=0
+            ),
+            throughput=ThroughputMetrics(
+                total_operations=0, total_seconds=0,
+                ops_per_second=0, vectors_per_second=0
+            ),
+            total_vectors=0,
+            index_build_time_seconds=0,
+        )
+
     def run_all(
         self,
         patterns: Optional[List[QueryPattern]] = None,
         category_counts: Optional[List[int]] = None,
         include_baseline: bool = True,
     ) -> BenchmarkResult:
-        """Run complete benchmark suite."""
+        """Run complete benchmark suite.
+        
+        Optimized structure: For each category count, data is loaded once per scenario,
+        then all search patterns are run against the loaded data.
+        
+        Structure for each category count:
+        1. Scenario A:
+           - Insert test (load data)
+           - Warmup (warm indexes)
+           - All search pattern tests
+        2. Scenario B:
+           - Insert test (load data)
+           - Warmup (warm indexes)
+           - All search pattern tests
+        """
         if patterns is None:
             patterns = get_all_patterns(self.config)
         
@@ -363,17 +428,152 @@ class BenchmarkRunner:
                 distribution="uniform",
             )
 
-            # Run each pattern for both scenarios
-            for pattern in patterns:
-                # Run Scenario A
-                for _ in range(self.config.benchmark.repeat):
-                    result_a = self.run_scenario_a(pattern, num_categories, category_ids)
-                    all_results.append(result_a)
+            # ==================== SCENARIO A ====================
+            print(f"\n--- Scenario A ({num_categories} categories) ---")
+            scenario_a = ScenarioA(self.config)
+            
+            try:
+                # Step 1: Insert test
+                print("\n[1/3] Insert Test (Scenario A)")
+                insert_collector = MetricsCollector()
+                insert_collector.start()
+                
+                setup_time_a = self._insert_data_scenario_a(
+                    scenario_a,
+                    self.dataset.vectors,
+                    category_ids,
+                    insert_collector,
+                )
+                insert_metrics_a = insert_collector.compute_insert_metrics(setup_time_a)
+                
+                # Record insert test result
+                all_results.append(TestMetrics(
+                    test_name="insert",
+                    scenario="A",
+                    num_categories=num_categories,
+                    insert_metrics=insert_metrics_a,
+                    search_metrics=SearchMetrics(
+                        latency=LatencyMetrics(
+                            count=0, total_seconds=0, mean_ms=0, p50_ms=0,
+                            p95_ms=0, p99_ms=0, min_ms=0, max_ms=0
+                        ),
+                        qps=0,
+                        recall=None,
+                    ),
+                    resource_metrics=insert_collector.get_latest_resource_metrics(),
+                    setup_time_seconds=setup_time_a,
+                    total_time_seconds=insert_collector.get_elapsed_time(),
+                ))
+                
+                # Step 2: Warmup
+                print("\n[2/3] Warmup (Scenario A)")
+                warmup_duration_a = self._run_warmup(scenario_a, num_categories)
+                
+                # Step 3: Run all search patterns
+                print("\n[3/3] Search Tests (Scenario A)")
+                empty_insert_metrics = self._create_empty_insert_metrics()
+                for pattern in patterns:
+                    for repeat_idx in range(self.config.benchmark.repeat):
+                        print(f"\n  Running {pattern.name} (repeat {repeat_idx + 1}/{self.config.benchmark.repeat})")
+                        
+                        search_collector = MetricsCollector()
+                        search_collector.start()
+                        
+                        self._run_search_pattern(
+                            scenario_a, pattern, num_categories, search_collector
+                        )
+                        
+                        search_metrics = search_collector.compute_search_metrics(
+                            self.dataset.neighbors,
+                            self.config.search.top_k,
+                        )
+                        
+                        all_results.append(TestMetrics(
+                            test_name=pattern.name,
+                            scenario="A",
+                            num_categories=num_categories,
+                            insert_metrics=empty_insert_metrics,
+                            search_metrics=search_metrics,
+                            resource_metrics=search_collector.get_latest_resource_metrics(),
+                            setup_time_seconds=0,
+                            total_time_seconds=search_collector.get_elapsed_time(),
+                        ))
+            finally:
+                scenario_a.cleanup()
 
-                # Run Scenario B
-                for _ in range(self.config.benchmark.repeat):
-                    result_b = self.run_scenario_b(pattern, num_categories, category_ids)
-                    all_results.append(result_b)
+            # ==================== SCENARIO B ====================
+            print(f"\n--- Scenario B ({num_categories} categories) ---")
+            scenario_b = ScenarioB(self.config)
+            
+            try:
+                # Step 1: Insert test
+                print("\n[1/3] Insert Test (Scenario B)")
+                insert_collector = MetricsCollector()
+                insert_collector.start()
+                
+                setup_time_b = self._insert_data_scenario_b(
+                    scenario_b,
+                    self.dataset.vectors,
+                    category_ids,
+                    num_categories,
+                    insert_collector,
+                )
+                insert_metrics_b = insert_collector.compute_insert_metrics(setup_time_b)
+                
+                # Record insert test result
+                all_results.append(TestMetrics(
+                    test_name="insert",
+                    scenario="B",
+                    num_categories=num_categories,
+                    insert_metrics=insert_metrics_b,
+                    search_metrics=SearchMetrics(
+                        latency=LatencyMetrics(
+                            count=0, total_seconds=0, mean_ms=0, p50_ms=0,
+                            p95_ms=0, p99_ms=0, min_ms=0, max_ms=0
+                        ),
+                        qps=0,
+                        recall=None,
+                    ),
+                    resource_metrics=insert_collector.get_latest_resource_metrics(),
+                    setup_time_seconds=setup_time_b,
+                    total_time_seconds=insert_collector.get_elapsed_time(),
+                ))
+                
+                # Step 2: Warmup
+                print("\n[2/3] Warmup (Scenario B)")
+                warmup_duration_b = self._run_warmup(scenario_b, num_categories)
+                
+                # Step 3: Run all search patterns
+                print("\n[3/3] Search Tests (Scenario B)")
+                empty_insert_metrics = self._create_empty_insert_metrics()
+                for pattern in patterns:
+                    for repeat_idx in range(self.config.benchmark.repeat):
+                        print(f"\n  Running {pattern.name} (repeat {repeat_idx + 1}/{self.config.benchmark.repeat})")
+                        
+                        search_collector = MetricsCollector()
+                        search_collector.start()
+                        
+                        self._run_search_pattern(
+                            scenario_b, pattern, num_categories, search_collector
+                        )
+                        
+                        search_metrics = search_collector.compute_search_metrics(
+                            self.dataset.neighbors,
+                            self.config.search.top_k,
+                        )
+                        
+                        all_results.append(TestMetrics(
+                            test_name=pattern.name,
+                            scenario="B",
+                            num_categories=num_categories,
+                            insert_metrics=empty_insert_metrics,
+                            search_metrics=search_metrics,
+                            resource_metrics=search_collector.get_latest_resource_metrics(),
+                            setup_time_seconds=0,
+                            total_time_seconds=search_collector.get_elapsed_time(),
+                        ))
+            finally:
+                scenario_b.cleanup()
 
         # Create result object
         config_dict = {
