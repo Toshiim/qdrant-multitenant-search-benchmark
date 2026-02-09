@@ -579,7 +579,7 @@ class BenchmarkRunner:
         # If not skipping load, run load phase and collect metrics
         if not skip_load:
             print("\n" + "="*60)
-            print("PHASE 1: Loading Collections")
+            print("Load phase: Creating and populating collections")
             print("="*60)
             all_load_results = self.load_collections(
                 category_counts=category_counts,
@@ -608,7 +608,10 @@ class BenchmarkRunner:
         # Run for each category count
         for num_categories in category_counts:
             print(f"\n{'='*60}")
-            print(f"PHASE 2: Testing with {num_categories} categories")
+            if skip_load:
+                print(f"Testing with {num_categories} categories (using existing collections)")
+            else:
+                print(f"Search phase: Testing with {num_categories} categories")
             print('='*60)
 
             # Generate category assignments

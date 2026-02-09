@@ -17,6 +17,16 @@ from qdrant_client.http.models import (
 from .config import Config
 
 
+# Index cache reset thresholds
+# These values are chosen to trigger Qdrant's optimizer to rebuild internal structures:
+# - TEMP_INDEXING_THRESHOLD: Lower value to trigger immediate re-indexing
+# - DEFAULT_INDEXING_THRESHOLD: Qdrant's default value to restore normal behavior
+# Changing the indexing_threshold forces the optimizer to re-evaluate segments,
+# which effectively clears cached HNSW graph data and resets search to "cold" state.
+TEMP_INDEXING_THRESHOLD = 10000
+DEFAULT_INDEXING_THRESHOLD = 20000
+
+
 def get_distance_enum(distance_str: str) -> Distance:
     """Convert distance string to Qdrant Distance enum."""
     distance_map = {
@@ -128,11 +138,10 @@ class ScenarioA:
         start = time.perf_counter()
         
         # Update optimizers config to force index refresh
-        # This triggers internal re-optimization which clears caches
         self.client.update_collection(
             collection_name=self.COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
-                indexing_threshold=10000,  # Temporarily change threshold
+                indexing_threshold=TEMP_INDEXING_THRESHOLD,
             ),
         )
         
@@ -143,7 +152,7 @@ class ScenarioA:
         self.client.update_collection(
             collection_name=self.COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
-                indexing_threshold=20000,  # Reset to default
+                indexing_threshold=DEFAULT_INDEXING_THRESHOLD,
             ),
         )
         
@@ -332,11 +341,10 @@ class ScenarioB:
         
         for cat_id in self._collections:
             name = self._collection_name(cat_id)
-            # Update optimizers config to force index refresh
             self.client.update_collection(
                 collection_name=name,
                 optimizer_config=OptimizersConfigDiff(
-                    indexing_threshold=10000,
+                    indexing_threshold=TEMP_INDEXING_THRESHOLD,
                 ),
             )
         
@@ -350,7 +358,7 @@ class ScenarioB:
             self.client.update_collection(
                 collection_name=name,
                 optimizer_config=OptimizersConfigDiff(
-                    indexing_threshold=20000,
+                    indexing_threshold=DEFAULT_INDEXING_THRESHOLD,
                 ),
             )
         
@@ -518,11 +526,10 @@ class BaselineScenario:
         """
         start = time.perf_counter()
         
-        # Update optimizers config to force index refresh
         self.client.update_collection(
             collection_name=self.COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
-                indexing_threshold=10000,
+                indexing_threshold=TEMP_INDEXING_THRESHOLD,
             ),
         )
         
@@ -531,7 +538,7 @@ class BaselineScenario:
         self.client.update_collection(
             collection_name=self.COLLECTION_NAME,
             optimizer_config=OptimizersConfigDiff(
-                indexing_threshold=20000,
+                indexing_threshold=DEFAULT_INDEXING_THRESHOLD,
             ),
         )
         
