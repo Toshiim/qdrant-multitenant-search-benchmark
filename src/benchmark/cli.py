@@ -1,8 +1,10 @@
 """Command-line interface for the benchmark."""
 
 import argparse
+import json
 import os
 import sys
+import time
 
 from .config import load_config
 from .dataset import load_dataset
@@ -29,6 +31,15 @@ Examples:
 
   # Run with specific category counts
   python -m benchmark.cli run --categories 10,50,100
+
+  # Skip collection loading (reuse existing collections - faster)
+  python -m benchmark.cli run --skip-load
+
+  # Run with cold cache (reset index before each test)
+  python -m benchmark.cli run --skip-load --reset-cache
+
+  # Load collections only (measure load metrics separately)
+  python -m benchmark.cli load
 
   # Generate report from existing results
   python -m benchmark.cli report --input results/benchmark_20240101_120000.json
@@ -81,6 +92,49 @@ Query Patterns:
         choices=["A", "B", "both"],
         default="both",
         help="Run only specific scenario",
+    )
+    run_parser.add_argument(
+        "--skip-load",
+        action="store_true",
+        help="Skip collection loading if collections exist (faster benchmark)",
+    )
+    run_parser.add_argument(
+        "--reset-cache",
+        action="store_true",
+        help="Reset HNSW index cache before each search test (cold start simulation)",
+    )
+
+    # Load command (new)
+    load_parser = subparsers.add_parser("load", help="Load collections only (measure load metrics)")
+    load_parser.add_argument(
+        "--config", "-c",
+        type=str,
+        default="config.yaml",
+        help="Path to configuration file",
+    )
+    load_parser.add_argument(
+        "--categories", "-n",
+        type=str,
+        default=None,
+        help="Comma-separated list of category counts to test",
+    )
+    load_parser.add_argument(
+        "--output", "-o",
+        type=str,
+        default="./results",
+        help="Output directory for results",
+    )
+    load_parser.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="Skip baseline collection",
+    )
+    load_parser.add_argument(
+        "--scenario",
+        type=str,
+        choices=["A", "B", "both"],
+        default="both",
+        help="Load only specific scenario",
     )
 
     # Report command
@@ -148,12 +202,19 @@ def cmd_run(args):
     runner = BenchmarkRunner(config, dataset)
 
     include_baseline = not args.no_baseline
+    skip_load = args.skip_load
+    reset_cache = args.reset_cache
+
     print(f"\nInclude baseline: {include_baseline}")
+    print(f"Skip load: {skip_load}")
+    print(f"Reset cache (cold start): {reset_cache}")
 
     result = runner.run_all(
         patterns=patterns,
         category_counts=category_counts,
         include_baseline=include_baseline,
+        skip_load=skip_load,
+        reset_cache=reset_cache,
     )
 
     # Save results
@@ -168,6 +229,98 @@ def cmd_run(args):
     print("\n" + "="*60)
     print("Benchmark complete!")
     print("="*60)
+
+    return 0
+
+
+def cmd_load(args):
+    """Execute collection load command (measure load metrics separately)."""
+    print("="*60)
+    print("Qdrant Multi-tenant Benchmark - Collection Loading")
+    print("="*60)
+
+    # Load configuration
+    config = load_config(args.config)
+    print(f"\nLoaded config from: {args.config}")
+    print(f"  HNSW: m={config.hnsw.m}, ef_construct={config.hnsw.ef_construct}")
+    print(f"  Batch size: {config.benchmark.batch_size}")
+
+    # Load dataset
+    print(f"\nLoading dataset: {config.dataset.name}")
+    dataset = load_dataset(config)
+    print(f"  Vectors: {len(dataset.vectors):,}")
+    print(f"  Dimensions: {dataset.dimensions}")
+    print(f"  Distance: {dataset.distance}")
+
+    # Determine category counts
+    if args.categories:
+        category_counts = [int(c.strip()) for c in args.categories.split(",")]
+    else:
+        category_counts = config.categories.get("counts", [10, 100])
+
+    print(f"\nCategory counts: {category_counts}")
+
+    # Create runner
+    runner = BenchmarkRunner(config, dataset)
+
+    include_baseline = not args.no_baseline
+    print(f"\nInclude baseline: {include_baseline}")
+    print(f"Scenario: {args.scenario}")
+
+    # Load collections
+    load_results = runner.load_collections(
+        category_counts=category_counts,
+        include_baseline=include_baseline,
+        scenarios=args.scenario,
+    )
+
+    # Save load results
+    os.makedirs(args.output, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    results_path = os.path.join(args.output, f"load_metrics_{timestamp}.json")
+    
+    results_dict = {
+        "timestamp": timestamp,
+        "config": {
+            "qdrant": {
+                "host": config.qdrant.host,
+                "port": config.qdrant.port,
+            },
+            "hnsw": {
+                "m": config.hnsw.m,
+                "ef_construct": config.hnsw.ef_construct,
+            },
+            "dataset": {
+                "name": dataset.name,
+                "num_vectors": len(dataset.vectors),
+                "dimensions": dataset.dimensions,
+            },
+            "batch_size": config.benchmark.batch_size,
+        },
+        "load_results": [r.to_dict() for r in load_results],
+    }
+    
+    with open(results_path, "w") as f:
+        json.dump(results_dict, f, indent=2)
+    
+    print(f"\n\nLoad results saved to: {results_path}")
+
+    # Print summary
+    print("\n" + "="*60)
+    print("Load Metrics Summary")
+    print("="*60)
+    print(f"{'Scenario':<12} {'Categories':<12} {'Setup (s)':<12} {'Insert (s)':<12} {'Throughput (vec/s)':<20}")
+    print("-"*70)
+    for r in load_results:
+        print(f"{r.scenario:<12} {r.num_categories:<12} {r.setup_time_seconds:<12.2f} "
+              f"{r.insert_metrics.latency.total_seconds:<12.2f} "
+              f"{r.insert_metrics.throughput.vectors_per_second:<20.2f}")
+
+    print("\n" + "="*60)
+    print("Collection loading complete!")
+    print("="*60)
+    print("\nYou can now run search benchmarks with --skip-load flag:")
+    print(f"  python -m benchmark.cli run --skip-load --reset-cache")
 
     return 0
 
@@ -197,6 +350,19 @@ def cmd_info(args):
     print("  gist-960-euclidean         - 1M vectors, 960 dims")
     print("  glove-100-angular          - 1.2M vectors, 100 dims")
 
+    print("\nOptimization Options:")
+    print("-" * 40)
+    print("  --skip-load    - Skip collection loading if collections exist")
+    print("                   Use after running 'load' command for faster benchmarks")
+    print("  --reset-cache  - Reset HNSW index cache before each search test")
+    print("                   Simulates cold start without reloading data")
+
+    print("\nRecommended Workflow:")
+    print("-" * 40)
+    print("  1. Load collections once:  python -m benchmark.cli load")
+    print("  2. Run benchmarks:         python -m benchmark.cli run --skip-load --reset-cache")
+    print("  3. Run again (warm cache): python -m benchmark.cli run --skip-load")
+
     return 0
 
 
@@ -206,6 +372,8 @@ def main():
 
     if args.command == "run":
         return cmd_run(args)
+    elif args.command == "load":
+        return cmd_load(args)
     elif args.command == "report":
         return cmd_report(args)
     elif args.command == "info":

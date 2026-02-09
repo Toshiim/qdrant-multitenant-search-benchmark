@@ -9,6 +9,7 @@ from qdrant_client.http import models
 from qdrant_client.http.models import (
     Distance,
     HnswConfigDiff,
+    OptimizersConfigDiff,
     PointStruct,
     VectorParams,
 )
@@ -60,8 +61,30 @@ class ScenarioA:
         )
         self._collection_created = False
 
-    def setup(self, dimensions: int, distance: str) -> float:
-        """Create collection and return time taken."""
+    def collection_exists(self) -> bool:
+        """Check if collection exists and has data."""
+        try:
+            info = self.client.get_collection(self.COLLECTION_NAME)
+            return info.points_count is not None and info.points_count > 0
+        except Exception:
+            return False
+
+    def setup(self, dimensions: int, distance: str, force_recreate: bool = True) -> float:
+        """Create collection and return time taken.
+        
+        Args:
+            dimensions: Vector dimensions
+            distance: Distance metric
+            force_recreate: If False and collection exists, skip creation
+        
+        Returns:
+            Time taken to create collection (0 if skipped)
+        """
+        # If not forcing recreate and collection exists, skip
+        if not force_recreate and self.collection_exists():
+            self._collection_created = True
+            return 0.0
+
         start = time.perf_counter()
 
         # Delete if exists
@@ -92,6 +115,51 @@ class ScenarioA:
 
         self._collection_created = True
         return time.perf_counter() - start
+
+    def reset_index_cache(self) -> float:
+        """Reset HNSW index to cold state by triggering re-optimization.
+        
+        This forces Qdrant to rebuild internal caches and reset the index
+        to a "cold" state without re-uploading data.
+        
+        Returns:
+            Time taken for the operation in seconds
+        """
+        start = time.perf_counter()
+        
+        # Update optimizers config to force index refresh
+        # This triggers internal re-optimization which clears caches
+        self.client.update_collection(
+            collection_name=self.COLLECTION_NAME,
+            optimizer_config=OptimizersConfigDiff(
+                indexing_threshold=10000,  # Temporarily change threshold
+            ),
+        )
+        
+        # Wait for optimization to complete
+        self._wait_for_green_status()
+        
+        # Restore original settings
+        self.client.update_collection(
+            collection_name=self.COLLECTION_NAME,
+            optimizer_config=OptimizersConfigDiff(
+                indexing_threshold=20000,  # Reset to default
+            ),
+        )
+        
+        self._wait_for_green_status()
+        
+        return time.perf_counter() - start
+
+    def _wait_for_green_status(self, timeout: int = 300):
+        """Wait for collection to be in green/ready status."""
+        start = time.time()
+        while time.time() - start < timeout:
+            info = self.client.get_collection(self.COLLECTION_NAME)
+            if info.status == models.CollectionStatus.GREEN:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"Collection {self.COLLECTION_NAME} did not reach green status within {timeout}s")
 
     def insert(
         self,
@@ -189,13 +257,42 @@ class ScenarioB:
             timeout=config.qdrant.timeout,
         )
         self._collections: Dict[int, str] = {}
+        self._num_categories: int = 0
 
     def _collection_name(self, category_id: int) -> str:
         """Generate collection name for category."""
         return f"{self.COLLECTION_PREFIX}{category_id}"
 
-    def setup(self, dimensions: int, distance: str, num_categories: int) -> float:
-        """Create all collections and return time taken."""
+    def collections_exist(self, num_categories: int) -> bool:
+        """Check if all collections exist and have data."""
+        try:
+            for cat_id in range(num_categories):
+                name = self._collection_name(cat_id)
+                info = self.client.get_collection(name)
+                if info.points_count is None or info.points_count == 0:
+                    return False
+                self._collections[cat_id] = name
+            self._num_categories = num_categories
+            return True
+        except Exception:
+            return False
+
+    def setup(self, dimensions: int, distance: str, num_categories: int, force_recreate: bool = True) -> float:
+        """Create all collections and return time taken.
+        
+        Args:
+            dimensions: Vector dimensions
+            distance: Distance metric
+            num_categories: Number of categories/collections
+            force_recreate: If False and collections exist, skip creation
+        
+        Returns:
+            Time taken to create collections (0 if skipped)
+        """
+        # If not forcing recreate and collections exist, skip
+        if not force_recreate and self.collections_exist(num_categories):
+            return 0.0
+
         start = time.perf_counter()
 
         # Delete existing collections
@@ -222,7 +319,56 @@ class ScenarioB:
             )
             self._collections[cat_id] = name
 
+        self._num_categories = num_categories
         return time.perf_counter() - start
+
+    def reset_index_cache(self) -> float:
+        """Reset HNSW index to cold state for all collections.
+        
+        Returns:
+            Time taken for the operation in seconds
+        """
+        start = time.perf_counter()
+        
+        for cat_id in self._collections:
+            name = self._collection_name(cat_id)
+            # Update optimizers config to force index refresh
+            self.client.update_collection(
+                collection_name=name,
+                optimizer_config=OptimizersConfigDiff(
+                    indexing_threshold=10000,
+                ),
+            )
+        
+        # Wait for all collections to be ready
+        for cat_id in self._collections:
+            self._wait_for_green_status(cat_id)
+        
+        # Restore original settings
+        for cat_id in self._collections:
+            name = self._collection_name(cat_id)
+            self.client.update_collection(
+                collection_name=name,
+                optimizer_config=OptimizersConfigDiff(
+                    indexing_threshold=20000,
+                ),
+            )
+        
+        for cat_id in self._collections:
+            self._wait_for_green_status(cat_id)
+        
+        return time.perf_counter() - start
+
+    def _wait_for_green_status(self, category_id: int, timeout: int = 300):
+        """Wait for collection to be in green/ready status."""
+        name = self._collection_name(category_id)
+        start = time.time()
+        while time.time() - start < timeout:
+            info = self.client.get_collection(name)
+            if info.status == models.CollectionStatus.GREEN:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"Collection {name} did not reach green status within {timeout}s")
 
     def insert(
         self,
@@ -320,8 +466,29 @@ class BaselineScenario:
             timeout=config.qdrant.timeout,
         )
 
-    def setup(self, dimensions: int, distance: str) -> float:
-        """Create collection and return time taken."""
+    def collection_exists(self) -> bool:
+        """Check if collection exists and has data."""
+        try:
+            info = self.client.get_collection(self.COLLECTION_NAME)
+            return info.points_count is not None and info.points_count > 0
+        except Exception:
+            return False
+
+    def setup(self, dimensions: int, distance: str, force_recreate: bool = True) -> float:
+        """Create collection and return time taken.
+        
+        Args:
+            dimensions: Vector dimensions
+            distance: Distance metric
+            force_recreate: If False and collection exists, skip creation
+        
+        Returns:
+            Time taken to create collection (0 if skipped)
+        """
+        # If not forcing recreate and collection exists, skip
+        if not force_recreate and self.collection_exists():
+            return 0.0
+
         start = time.perf_counter()
 
         try:
@@ -342,6 +509,45 @@ class BaselineScenario:
         )
 
         return time.perf_counter() - start
+
+    def reset_index_cache(self) -> float:
+        """Reset HNSW index to cold state by triggering re-optimization.
+        
+        Returns:
+            Time taken for the operation in seconds
+        """
+        start = time.perf_counter()
+        
+        # Update optimizers config to force index refresh
+        self.client.update_collection(
+            collection_name=self.COLLECTION_NAME,
+            optimizer_config=OptimizersConfigDiff(
+                indexing_threshold=10000,
+            ),
+        )
+        
+        self._wait_for_green_status()
+        
+        self.client.update_collection(
+            collection_name=self.COLLECTION_NAME,
+            optimizer_config=OptimizersConfigDiff(
+                indexing_threshold=20000,
+            ),
+        )
+        
+        self._wait_for_green_status()
+        
+        return time.perf_counter() - start
+
+    def _wait_for_green_status(self, timeout: int = 300):
+        """Wait for collection to be in green/ready status."""
+        start = time.time()
+        while time.time() - start < timeout:
+            info = self.client.get_collection(self.COLLECTION_NAME)
+            if info.status == models.CollectionStatus.GREEN:
+                return
+            time.sleep(0.5)
+        raise TimeoutError(f"Collection {self.COLLECTION_NAME} did not reach green status within {timeout}s")
 
     def insert(
         self,

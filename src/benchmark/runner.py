@@ -11,9 +11,33 @@ from tqdm import tqdm
 
 from .config import Config
 from .dataset import Dataset, assign_categories, batch_vectors
-from .metrics import MetricsCollector, TestMetrics
+from .metrics import MetricsCollector, TestMetrics, InsertMetrics, LatencyMetrics, ThroughputMetrics, ResourceMetrics
 from .qdrant_client_wrapper import BaselineScenario, ScenarioA, ScenarioB
 from .query_patterns import QueryPattern, get_all_patterns
+
+
+@dataclass
+class LoadMetrics:
+    """Metrics for collection loading operation."""
+
+    scenario: str
+    num_categories: int
+    setup_time_seconds: float
+    insert_metrics: InsertMetrics
+    total_time_seconds: float
+    resource_metrics: ResourceMetrics
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary."""
+        return {
+            "test_name": "collection_load",
+            "scenario": self.scenario,
+            "num_categories": self.num_categories,
+            "setup_time_seconds": round(self.setup_time_seconds, 3),
+            "insert": self.insert_metrics.to_dict(),
+            "total_time_seconds": round(self.total_time_seconds, 3),
+            "resources": self.resource_metrics.to_dict(),
+        }
 
 
 @dataclass
@@ -22,6 +46,7 @@ class BenchmarkResult:
 
     config: Dict
     results: List[TestMetrics]
+    load_results: List[LoadMetrics]
     timestamp: str
 
     def to_dict(self) -> Dict:
@@ -29,6 +54,7 @@ class BenchmarkResult:
         return {
             "config": self.config,
             "timestamp": self.timestamp,
+            "load_results": [r.to_dict() for r in self.load_results],
             "results": [r.to_dict() for r in self.results],
         }
 
@@ -46,6 +72,7 @@ class BenchmarkRunner:
         self.config = config
         self.dataset = dataset
         self.results: List[TestMetrics] = []
+        self.load_results: List[LoadMetrics] = []
 
     def _insert_data_scenario_a(
         self,
@@ -53,9 +80,14 @@ class BenchmarkRunner:
         vectors: np.ndarray,
         category_ids: np.ndarray,
         collector: MetricsCollector,
+        force_recreate: bool = True,
     ) -> float:
         """Insert data for Scenario A (single collection)."""
-        setup_time = scenario.setup(self.dataset.dimensions, self.dataset.distance)
+        setup_time = scenario.setup(self.dataset.dimensions, self.dataset.distance, force_recreate=force_recreate)
+        
+        # If skipping load and collection exists, don't insert
+        if setup_time == 0.0 and not force_recreate:
+            return setup_time
         
         for batch_vecs, batch_ids, batch_cats in tqdm(
             batch_vectors(vectors, category_ids, self.config.benchmark.batch_size),
@@ -78,13 +110,19 @@ class BenchmarkRunner:
         category_ids: np.ndarray,
         num_categories: int,
         collector: MetricsCollector,
+        force_recreate: bool = True,
     ) -> float:
         """Insert data for Scenario B (multiple collections)."""
         setup_time = scenario.setup(
             self.dataset.dimensions,
             self.dataset.distance,
             num_categories,
+            force_recreate=force_recreate,
         )
+
+        # If skipping load and collections exist, don't insert
+        if setup_time == 0.0 and not force_recreate:
+            return setup_time
 
         # Group vectors by category
         for cat_id in tqdm(range(num_categories), desc="Inserting (Scenario B)"):
@@ -115,9 +153,14 @@ class BenchmarkRunner:
         scenario: BaselineScenario,
         vectors: np.ndarray,
         collector: MetricsCollector,
+        force_recreate: bool = True,
     ) -> float:
         """Insert data for baseline scenario."""
-        setup_time = scenario.setup(self.dataset.dimensions, self.dataset.distance)
+        setup_time = scenario.setup(self.dataset.dimensions, self.dataset.distance, force_recreate=force_recreate)
+
+        # If skipping load and collection exists, don't insert
+        if setup_time == 0.0 and not force_recreate:
+            return setup_time
 
         ids = list(range(len(vectors)))
         for start in tqdm(
@@ -181,8 +224,20 @@ class BenchmarkRunner:
         pattern: QueryPattern,
         num_categories: int,
         category_ids: np.ndarray,
+        skip_load: bool = False,
+        reset_cache: bool = False,
+        cleanup_after: bool = True,
     ) -> TestMetrics:
-        """Run benchmark for Scenario A."""
+        """Run benchmark for Scenario A.
+        
+        Args:
+            pattern: Query pattern to use
+            num_categories: Number of categories
+            category_ids: Category assignments for vectors
+            skip_load: If True, skip loading if collection exists
+            reset_cache: If True, reset index cache before search (cold start)
+            cleanup_after: If True, cleanup collection after test
+        """
         print(f"\n=== Running Scenario A: {pattern.name} ({num_categories} categories) ===")
         
         scenario = ScenarioA(self.config)
@@ -191,14 +246,22 @@ class BenchmarkRunner:
 
         try:
             # Insert phase
+            force_recreate = not skip_load
             setup_time = self._insert_data_scenario_a(
                 scenario,
                 self.dataset.vectors,
                 category_ids,
                 collector,
+                force_recreate=force_recreate,
             )
             index_build_time = setup_time
             insert_metrics = collector.compute_insert_metrics(index_build_time)
+
+            # Reset index cache if requested (simulate cold start)
+            if reset_cache and skip_load:
+                print("  Resetting index cache for cold start...")
+                reset_time = scenario.reset_index_cache()
+                print(f"  Index cache reset completed in {reset_time:.2f}s")
 
             # Search phase
             collector.reset()
@@ -224,15 +287,28 @@ class BenchmarkRunner:
                 total_time_seconds=total_time,
             )
         finally:
-            scenario.cleanup()
+            if cleanup_after:
+                scenario.cleanup()
 
     def run_scenario_b(
         self,
         pattern: QueryPattern,
         num_categories: int,
         category_ids: np.ndarray,
+        skip_load: bool = False,
+        reset_cache: bool = False,
+        cleanup_after: bool = True,
     ) -> TestMetrics:
-        """Run benchmark for Scenario B."""
+        """Run benchmark for Scenario B.
+        
+        Args:
+            pattern: Query pattern to use
+            num_categories: Number of categories
+            category_ids: Category assignments for vectors
+            skip_load: If True, skip loading if collections exist
+            reset_cache: If True, reset index cache before search (cold start)
+            cleanup_after: If True, cleanup collections after test
+        """
         print(f"\n=== Running Scenario B: {pattern.name} ({num_categories} categories) ===")
         
         scenario = ScenarioB(self.config)
@@ -241,15 +317,23 @@ class BenchmarkRunner:
 
         try:
             # Insert phase
+            force_recreate = not skip_load
             setup_time = self._insert_data_scenario_b(
                 scenario,
                 self.dataset.vectors,
                 category_ids,
                 num_categories,
                 collector,
+                force_recreate=force_recreate,
             )
             index_build_time = setup_time
             insert_metrics = collector.compute_insert_metrics(index_build_time)
+
+            # Reset index cache if requested (simulate cold start)
+            if reset_cache and skip_load:
+                print("  Resetting index cache for cold start...")
+                reset_time = scenario.reset_index_cache()
+                print(f"  Index cache reset completed in {reset_time:.2f}s")
 
             # Search phase
             collector.reset()
@@ -275,10 +359,24 @@ class BenchmarkRunner:
                 total_time_seconds=total_time,
             )
         finally:
-            scenario.cleanup()
+            if cleanup_after:
+                scenario.cleanup()
 
-    def run_baseline(self, pattern: QueryPattern) -> TestMetrics:
-        """Run baseline benchmark (no categories)."""
+    def run_baseline(
+        self,
+        pattern: QueryPattern,
+        skip_load: bool = False,
+        reset_cache: bool = False,
+        cleanup_after: bool = True,
+    ) -> TestMetrics:
+        """Run baseline benchmark (no categories).
+        
+        Args:
+            pattern: Query pattern to use
+            skip_load: If True, skip loading if collection exists
+            reset_cache: If True, reset index cache before search (cold start)
+            cleanup_after: If True, cleanup collection after test
+        """
         print(f"\n=== Running Baseline: {pattern.name} ===")
         
         scenario = BaselineScenario(self.config)
@@ -287,13 +385,21 @@ class BenchmarkRunner:
 
         try:
             # Insert phase
+            force_recreate = not skip_load
             setup_time = self._insert_data_baseline(
                 scenario,
                 self.dataset.vectors,
                 collector,
+                force_recreate=force_recreate,
             )
             index_build_time = setup_time
             insert_metrics = collector.compute_insert_metrics(index_build_time)
+
+            # Reset index cache if requested (simulate cold start)
+            if reset_cache and skip_load:
+                print("  Resetting index cache for cold start...")
+                reset_time = scenario.reset_index_cache()
+                print(f"  Index cache reset completed in {reset_time:.2f}s")
 
             # Search phase
             collector.reset()
@@ -319,15 +425,147 @@ class BenchmarkRunner:
                 total_time_seconds=total_time,
             )
         finally:
-            scenario.cleanup()
+            if cleanup_after:
+                scenario.cleanup()
+
+    def load_collections(
+        self,
+        category_counts: Optional[List[int]] = None,
+        include_baseline: bool = True,
+        scenarios: str = "both",
+    ) -> List[LoadMetrics]:
+        """Load collections and return load metrics separately.
+        
+        This method only loads data into collections without running search tests.
+        It's useful for separating load time metrics from search metrics.
+        
+        Args:
+            category_counts: List of category counts to test
+            include_baseline: Whether to load baseline collection
+            scenarios: Which scenarios to load ("A", "B", or "both")
+        
+        Returns:
+            List of LoadMetrics for each loaded configuration
+        """
+        if category_counts is None:
+            category_counts = self.config.categories.get("counts", [10, 100])
+
+        load_results: List[LoadMetrics] = []
+
+        # Load baseline
+        if include_baseline:
+            print("\n=== Loading Baseline Collection ===")
+            scenario = BaselineScenario(self.config)
+            collector = MetricsCollector()
+            collector.start()
+
+            setup_time = self._insert_data_baseline(
+                scenario,
+                self.dataset.vectors,
+                collector,
+                force_recreate=True,
+            )
+            insert_metrics = collector.compute_insert_metrics(setup_time)
+            resource_metrics = collector.get_latest_resource_metrics()
+            total_time = collector.get_elapsed_time()
+
+            load_results.append(LoadMetrics(
+                scenario="baseline",
+                num_categories=0,
+                setup_time_seconds=setup_time,
+                insert_metrics=insert_metrics,
+                total_time_seconds=total_time,
+                resource_metrics=resource_metrics,
+            ))
+
+        # Load for each category count
+        for num_categories in category_counts:
+            print(f"\n{'='*60}")
+            print(f"Loading collections for {num_categories} categories")
+            print('='*60)
+
+            # Generate category assignments
+            category_ids = assign_categories(
+                len(self.dataset.vectors),
+                num_categories,
+                distribution="uniform",
+            )
+
+            # Load Scenario A
+            if scenarios in ("A", "both"):
+                print(f"\n--- Loading Scenario A ({num_categories} categories) ---")
+                scenario_a = ScenarioA(self.config)
+                collector_a = MetricsCollector()
+                collector_a.start()
+
+                setup_time_a = self._insert_data_scenario_a(
+                    scenario_a,
+                    self.dataset.vectors,
+                    category_ids,
+                    collector_a,
+                    force_recreate=True,
+                )
+                insert_metrics_a = collector_a.compute_insert_metrics(setup_time_a)
+                resource_metrics_a = collector_a.get_latest_resource_metrics()
+                total_time_a = collector_a.get_elapsed_time()
+
+                load_results.append(LoadMetrics(
+                    scenario="A",
+                    num_categories=num_categories,
+                    setup_time_seconds=setup_time_a,
+                    insert_metrics=insert_metrics_a,
+                    total_time_seconds=total_time_a,
+                    resource_metrics=resource_metrics_a,
+                ))
+
+            # Load Scenario B
+            if scenarios in ("B", "both"):
+                print(f"\n--- Loading Scenario B ({num_categories} categories) ---")
+                scenario_b = ScenarioB(self.config)
+                collector_b = MetricsCollector()
+                collector_b.start()
+
+                setup_time_b = self._insert_data_scenario_b(
+                    scenario_b,
+                    self.dataset.vectors,
+                    category_ids,
+                    num_categories,
+                    collector_b,
+                    force_recreate=True,
+                )
+                insert_metrics_b = collector_b.compute_insert_metrics(setup_time_b)
+                resource_metrics_b = collector_b.get_latest_resource_metrics()
+                total_time_b = collector_b.get_elapsed_time()
+
+                load_results.append(LoadMetrics(
+                    scenario="B",
+                    num_categories=num_categories,
+                    setup_time_seconds=setup_time_b,
+                    insert_metrics=insert_metrics_b,
+                    total_time_seconds=total_time_b,
+                    resource_metrics=resource_metrics_b,
+                ))
+
+        self.load_results = load_results
+        return load_results
 
     def run_all(
         self,
         patterns: Optional[List[QueryPattern]] = None,
         category_counts: Optional[List[int]] = None,
         include_baseline: bool = True,
+        skip_load: bool = False,
+        reset_cache: bool = False,
     ) -> BenchmarkResult:
-        """Run complete benchmark suite."""
+        """Run complete benchmark suite.
+        
+        Args:
+            patterns: Query patterns to run (all if None)
+            category_counts: Category counts to test (from config if None)
+            include_baseline: Whether to include baseline test
+            skip_load: If True, skip loading collections if they exist (faster)
+            reset_cache: If True, reset index cache before each search test (cold start)
+        """
         if patterns is None:
             patterns = get_all_patterns(self.config)
         
@@ -335,7 +573,18 @@ class BenchmarkRunner:
             category_counts = self.config.categories.get("counts", [10, 100])
 
         all_results: List[TestMetrics] = []
+        all_load_results: List[LoadMetrics] = []
         timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+        # If not skipping load, run load phase and collect metrics
+        if not skip_load:
+            print("\n" + "="*60)
+            print("PHASE 1: Loading Collections")
+            print("="*60)
+            all_load_results = self.load_collections(
+                category_counts=category_counts,
+                include_baseline=include_baseline,
+            )
 
         # Run baseline
         if include_baseline:
@@ -347,13 +596,19 @@ class BenchmarkRunner:
                     break
             if baseline_pattern is None:
                 baseline_pattern = patterns[0]
-            result = self.run_baseline(baseline_pattern)
+            
+            result = self.run_baseline(
+                baseline_pattern,
+                skip_load=skip_load,
+                reset_cache=reset_cache,
+                cleanup_after=False,  # Keep collection for potential re-run
+            )
             all_results.append(result)
 
         # Run for each category count
         for num_categories in category_counts:
             print(f"\n{'='*60}")
-            print(f"Testing with {num_categories} categories")
+            print(f"PHASE 2: Testing with {num_categories} categories")
             print('='*60)
 
             # Generate category assignments
@@ -367,12 +622,26 @@ class BenchmarkRunner:
             for pattern in patterns:
                 # Run Scenario A
                 for _ in range(self.config.benchmark.repeat):
-                    result_a = self.run_scenario_a(pattern, num_categories, category_ids)
+                    result_a = self.run_scenario_a(
+                        pattern,
+                        num_categories,
+                        category_ids,
+                        skip_load=skip_load,
+                        reset_cache=reset_cache,
+                        cleanup_after=False,  # Keep collection for potential re-run
+                    )
                     all_results.append(result_a)
 
                 # Run Scenario B
                 for _ in range(self.config.benchmark.repeat):
-                    result_b = self.run_scenario_b(pattern, num_categories, category_ids)
+                    result_b = self.run_scenario_b(
+                        pattern,
+                        num_categories,
+                        category_ids,
+                        skip_load=skip_load,
+                        reset_cache=reset_cache,
+                        cleanup_after=False,  # Keep collection for potential re-run
+                    )
                     all_results.append(result_b)
 
         # Create result object
@@ -403,11 +672,15 @@ class BenchmarkRunner:
                 "repeat": self.config.benchmark.repeat,
             },
             "category_counts": category_counts,
+            "skip_load": skip_load,
+            "reset_cache": reset_cache,
         }
 
         self.results = all_results
+        self.load_results = all_load_results
         return BenchmarkResult(
             config=config_dict,
             results=all_results,
+            load_results=all_load_results,
             timestamp=timestamp,
         )

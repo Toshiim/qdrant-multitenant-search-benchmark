@@ -62,6 +62,27 @@ python -m benchmark.cli run --patterns hot_category_loop,uniform_random
 python -m benchmark.cli run --categories 10,50,100,500
 ```
 
+### Optimized Workflow (Recommended)
+
+For faster benchmark iterations, you can separate the collection loading phase from search testing:
+
+```bash
+# Step 1: Load collections once (measure load metrics)
+python -m benchmark.cli load
+
+# Step 2: Run search benchmarks with cold cache (reuses existing collections)
+python -m benchmark.cli run --skip-load --reset-cache
+
+# Step 3: Run again with warm cache for comparison
+python -m benchmark.cli run --skip-load
+```
+
+**Benefits of this workflow:**
+- Collection loading is measured separately as useful benchmark data
+- Search tests run much faster without reloading data each time
+- `--reset-cache` option resets HNSW index to simulate cold start without reloading
+- Easily compare warm vs cold cache performance
+
 ### Generate Report from Existing Results
 
 ```bash
