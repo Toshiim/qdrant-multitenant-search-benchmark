@@ -4,7 +4,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 from tqdm import tqdm
@@ -14,6 +14,9 @@ from .dataset import Dataset, assign_categories, batch_vectors
 from .metrics import MetricsCollector, TestMetrics, InsertMetrics, SearchMetrics, ResourceMetrics, LatencyMetrics, ThroughputMetrics
 from .qdrant_client_wrapper import BaselineScenario, ScenarioA, ScenarioB
 from .query_patterns import QueryPattern, get_all_patterns
+
+# Type alias for any scenario type
+ScenarioType = Union[ScenarioA, ScenarioB, BaselineScenario]
 
 
 @dataclass
@@ -138,7 +141,7 @@ class BenchmarkRunner:
 
     def _run_warmup(
         self,
-        scenario,
+        scenario: ScenarioType,
         num_categories: int,
     ) -> float:
         """Run warmup queries to warm up indexes before search tests.
@@ -175,7 +178,7 @@ class BenchmarkRunner:
 
     def _run_search_pattern(
         self,
-        scenario,
+        scenario: ScenarioType,
         pattern: QueryPattern,
         num_categories: int,
         collector: MetricsCollector,
@@ -468,6 +471,7 @@ class BenchmarkRunner:
                 
                 # Step 3: Run all search patterns
                 print("\n[3/3] Search Tests (Scenario A)")
+                empty_insert_metrics = self._create_empty_insert_metrics()
                 for pattern in patterns:
                     for repeat_idx in range(self.config.benchmark.repeat):
                         print(f"\n  Running {pattern.name} (repeat {repeat_idx + 1}/{self.config.benchmark.repeat})")
@@ -488,7 +492,7 @@ class BenchmarkRunner:
                             test_name=pattern.name,
                             scenario="A",
                             num_categories=num_categories,
-                            insert_metrics=self._create_empty_insert_metrics(),
+                            insert_metrics=empty_insert_metrics,
                             search_metrics=search_metrics,
                             resource_metrics=search_collector.get_latest_resource_metrics(),
                             setup_time_seconds=0,
@@ -541,6 +545,7 @@ class BenchmarkRunner:
                 
                 # Step 3: Run all search patterns
                 print("\n[3/3] Search Tests (Scenario B)")
+                empty_insert_metrics = self._create_empty_insert_metrics()
                 for pattern in patterns:
                     for repeat_idx in range(self.config.benchmark.repeat):
                         print(f"\n  Running {pattern.name} (repeat {repeat_idx + 1}/{self.config.benchmark.repeat})")
@@ -561,7 +566,7 @@ class BenchmarkRunner:
                             test_name=pattern.name,
                             scenario="B",
                             num_categories=num_categories,
-                            insert_metrics=self._create_empty_insert_metrics(),
+                            insert_metrics=empty_insert_metrics,
                             search_metrics=search_metrics,
                             resource_metrics=search_collector.get_latest_resource_metrics(),
                             setup_time_seconds=0,
