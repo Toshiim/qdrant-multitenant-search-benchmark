@@ -183,7 +183,9 @@ This yields tuples of `(vectors, ids, category_ids)` for efficient batch inserti
 | gist-960-euclidean | 1M | 960 | Euclidean | ~4GB |
 | glove-100-angular | 1.2M | 100 | Cosine | ~500MB |
 
-All datasets are downloaded from http://ann-benchmarks.com/
+All datasets are downloaded from ann-benchmarks.com (using HTTP URLs as provided by the benchmark dataset repository)
+
+**Note**: The dataset URLs use HTTP protocol as provided by the ann-benchmarks repository. Downloads are for publicly available benchmark datasets.
 
 ## Usage in Benchmark
 

@@ -206,7 +206,7 @@ def plot_scaling_analysis(df: pd.DataFrame, output_dir: str = "./results"):
     """Generate scaling analysis plots."""
     os.makedirs(output_dir, exist_ok=True)
     
-    # Get one pattern for clean scaling view
+    # Get one pattern for clean scaling view (prefer uniform_random as representative)
     test_name = "uniform_random"
     df_pattern = df[df["test_name"] == test_name]
     
@@ -297,7 +297,7 @@ def plot_ram_comparison(df: pd.DataFrame, output_dir: str = "./results"):
     if len(df_filtered) == 0:
         return
     
-    # Get a representative pattern
+    # Get a representative pattern (prefer uniform_random as it's most common)
     test_names = df_filtered["test_name"].unique()
     if len(test_names) == 0:
         return
