@@ -47,6 +47,8 @@ class TestGenerateSyntheticDataset:
         norms = np.linalg.norm(dataset.vectors, axis=1)
         # Not all vectors should have norm of 1 (they're random)
         assert not np.allclose(norms, np.ones(100))
+        # Verify norms have meaningful variance (random vectors)
+        assert norms.std() > 0.1, "Vector norms should vary significantly"
 
     def test_euclidean_not_normalized(self):
         """Test vectors are not normalized for euclidean distance."""
