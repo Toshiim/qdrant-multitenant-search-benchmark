@@ -215,10 +215,3 @@ class TestHuggingFaceDataset:
     def test_load_huggingface_function_exists(self):
         """Test that load_huggingface_dataset function is callable."""
         assert callable(load_huggingface_dataset)
-
-    def test_hf_not_available_error(self):
-        """Test error when datasets library is not available."""
-        # This test verifies the error handling when HF is not available
-        # Since HF_AVAILABLE is True in our environment, we skip this
-        # But the function should raise ImportError when HF is not available
-        pass

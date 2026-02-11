@@ -155,8 +155,15 @@ def load_huggingface_dataset(
     
     # Handle case where embeddings might be lists of lists
     if len(embeddings.shape) == 1:
-        # Convert list of lists to numpy array
-        embeddings = np.array([np.array(emb, dtype=np.float32) for emb in embeddings])
+        # Convert list of lists to numpy array efficiently
+        # For large datasets, pre-allocate array to avoid intermediate copies
+        first_emb = np.array(embeddings[0], dtype=np.float32)
+        dimensions = len(first_emb)
+        result = np.empty((len(embeddings), dimensions), dtype=np.float32)
+        result[0] = first_emb
+        for i in range(1, len(embeddings)):
+            result[i] = embeddings[i]
+        embeddings = result
     
     dimensions = embeddings.shape[1]
     
@@ -168,7 +175,14 @@ def load_huggingface_dataset(
         if query_embeddings.dtype != np.float32:
             query_embeddings = query_embeddings.astype(np.float32)
         if len(query_embeddings.shape) == 1:
-            query_embeddings = np.array([np.array(emb, dtype=np.float32) for emb in query_embeddings])
+            # Convert efficiently with pre-allocation
+            first_emb = np.array(query_embeddings[0], dtype=np.float32)
+            dims = len(first_emb)
+            result = np.empty((len(query_embeddings), dims), dtype=np.float32)
+            result[0] = first_emb
+            for i in range(1, len(query_embeddings)):
+                result[i] = query_embeddings[i]
+            query_embeddings = result
         
         # Use all queries or sample if there are too many
         if len(query_embeddings) > num_queries:
