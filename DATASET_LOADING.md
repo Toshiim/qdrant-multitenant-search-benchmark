@@ -4,9 +4,10 @@ This document explains how the benchmark loads and processes datasets for testin
 
 ## Overview
 
-The dataset loading system supports two types of datasets:
+The dataset loading system supports three types of datasets:
 1. **Synthetic datasets**: Generated on-the-fly using random vectors
-2. **Standard benchmark datasets**: Downloaded from ann-benchmarks.com in HDF5 format
+2. **Hugging Face datasets**: Downloaded from Hugging Face Hub (recommended)
+3. **HDF5 benchmark datasets**: Downloaded from ann-benchmarks.com in HDF5 format
 
 ## Dataset Structure
 
@@ -31,7 +32,7 @@ Dataset configuration is specified in `config.yaml`:
 
 ```yaml
 dataset:
-  name: "synthetic"  # or "dbpedia-openai-1M-angular", etc.
+  name: "synthetic"  # or "dbpedia-entities-openai-1M", "dbpedia-openai-1M-angular", etc.
   synthetic:
     num_vectors: 100000
     dimensions: 128
@@ -78,9 +79,54 @@ def generate_synthetic_dataset(num_vectors, dimensions, num_queries, distance, s
 
 **Important**: Qdrant automatically normalizes vectors when using `Distance.COSINE`, so pre-normalizing vectors would be redundant and waste computation time. The benchmark sends raw vectors to Qdrant for more accurate performance measurements.
 
-### 4. Standard Dataset Loading
+### 4. Hugging Face Dataset Loading (Recommended)
+
+For datasets hosted on Hugging Face Hub (e.g., `KShivendu/dbpedia-entities-openai-1M`):
+
+#### Step 1: Load dataset from Hugging Face
+```python
+from datasets import load_dataset as hf_load_dataset
+
+# Load the dataset with the specified split
+dataset = hf_load_dataset(repo_id, split="train", cache_dir=cache_dir)
+```
+
+#### Step 2: Extract embeddings
+```python
+# Extract embeddings from the specified column
+embeddings = np.array(dataset[embedding_column])
+
+# Convert to float32 if needed
+if embeddings.dtype != np.float32:
+    embeddings = embeddings.astype(np.float32)
+
+# Handle list of lists format
+if len(embeddings.shape) == 1:
+    embeddings = np.array([np.array(emb, dtype=np.float32) for emb in embeddings])
+```
+
+#### Step 3: Sample queries
+```python
+# Sample query vectors from the main dataset
+if len(embeddings) > num_queries:
+    indices = np.random.choice(len(embeddings), size=num_queries, replace=False)
+    queries = embeddings[indices]
+else:
+    queries = embeddings.copy()
+```
+
+**Benefits of Hugging Face datasets:**
+- More reliable download infrastructure
+- Built-in caching and resume capability
+- Easy to add new datasets
+- Community-maintained datasets
+- No need for HDF5 files
+
+### 5. HDF5 Dataset Loading (Legacy)
 
 For standard benchmark datasets (e.g., from ann-benchmarks.com):
+
+**Note**: ann-benchmarks.com URLs may not always be accessible. Consider using Hugging Face datasets instead.
 
 #### Step 1: Check if dataset exists locally
 ```python
@@ -125,7 +171,7 @@ def load_hdf5_dataset(path: str) -> Dataset:
 - `test`: Query vectors (used for search)
 - `neighbors`: Ground truth nearest neighbors (for recall calculation)
 
-### 5. Category Assignment
+### 6. Category Assignment
 
 After loading the dataset, vectors are assigned to categories:
 
@@ -149,7 +195,7 @@ def assign_categories(num_vectors, num_categories, distribution, seed):
 - **Uniform**: Each vector has equal probability of belonging to any category
 - **Zipfian**: Skewed distribution where some categories have many more vectors (realistic for multi-tenant scenarios)
 
-### 6. Batching
+### 7. Batching
 
 During insertion, vectors are processed in batches:
 
@@ -175,7 +221,25 @@ This yields tuples of `(vectors, ids, category_ids)` for efficient batch inserti
 - Fast, no download required
 - No ground truth for recall calculation
 
-### Standard Benchmark Datasets
+### Hugging Face Datasets (Recommended)
+
+| Dataset | Vectors | Dimensions | Distance | Repository |
+|---------|---------|------------|----------|------------|
+| dbpedia-entities-openai-1M | 1M | 1536 | Cosine | [KShivendu/dbpedia-entities-openai-1M](https://huggingface.co/datasets/KShivendu/dbpedia-entities-openai-1M) |
+
+**Benefits:**
+- Reliable download infrastructure with automatic resume
+- Built-in caching (datasets are cached in `./data/huggingface_cache/`)
+- Easy to extend with more datasets
+- Community-maintained and updated
+
+**Usage:**
+```yaml
+dataset:
+  name: "dbpedia-entities-openai-1M"
+```
+
+### HDF5 Benchmark Datasets (Legacy)
 
 | Dataset | Vectors | Dimensions | Distance | Size |
 |---------|---------|------------|----------|------|
@@ -183,6 +247,8 @@ This yields tuples of `(vectors, ids, category_ids)` for efficient batch inserti
 | deep-image-96-angular | 10M | 96 | Cosine | ~4GB |
 | gist-960-euclidean | 1M | 960 | Euclidean | ~4GB |
 | glove-100-angular | 1.2M | 100 | Cosine | ~500MB |
+
+**Note:** These datasets are downloaded from ann-benchmarks.com which may not always be accessible. For reliable dataset loading, use Hugging Face datasets instead.
 
 All datasets are downloaded from ann-benchmarks.com (using HTTP URLs as provided by the benchmark dataset repository)
 
@@ -201,9 +267,11 @@ All datasets are downloaded from ann-benchmarks.com (using HTTP URLs as provided
 
 ## Caching
 
-- Downloaded datasets are cached in `./data/` directory
+- **HDF5 datasets**: Cached in `./data/` directory
+- **Hugging Face datasets**: Cached in `./data/huggingface_cache/` directory
 - Once downloaded, datasets are reused across benchmark runs
-- No re-download unless file is deleted
+- No re-download unless cache is deleted
+- Hugging Face datasets support automatic resume on interrupted downloads
 
 ## Memory Considerations
 
@@ -219,6 +287,52 @@ All datasets are downloaded from ann-benchmarks.com (using HTTP URLs as provided
 - **HDF5 parse errors**: File corruption or invalid format raises `h5py` exceptions
 - **Missing fields**: `neighbors` field is optional (None if not present)
 
+## Adding New Datasets
+
+### Adding a Hugging Face Dataset
+
+To add a new Hugging Face dataset:
+
+1. Find a dataset on Hugging Face Hub with embedding vectors
+2. Add it to `HF_DATASET_INFO` in `src/benchmark/dataset.py`:
+
+```python
+HF_DATASET_INFO = {
+    "your-dataset-name": {
+        "repo_id": "username/dataset-name",
+        "embedding_column": "embeddings",  # Column containing vectors
+        "dimensions": 768,                  # Vector dimensions
+        "distance": "Cosine",              # Distance metric
+        "split": "train",                  # Dataset split to use
+    },
+}
+```
+
+3. Use it in your config:
+
+```yaml
+dataset:
+  name: "your-dataset-name"
+```
+
+### Adding an HDF5 Dataset
+
+To add a new HDF5 dataset from ann-benchmarks.com:
+
+1. Find the dataset URL
+2. Add it to `DATASET_INFO` in `src/benchmark/dataset.py`:
+
+```python
+DATASET_INFO = {
+    "your-dataset-name": {
+        "url": "http://ann-benchmarks.com/your-dataset.hdf5",
+        "num_vectors": 1000000,
+        "dimensions": 128,
+        "distance": "Cosine",
+    },
+}
+```
+
 ## Future Enhancements
 
 Possible improvements to dataset loading:
@@ -227,3 +341,5 @@ Possible improvements to dataset loading:
 3. Partial dataset loading for very large datasets
 4. Dataset validation and integrity checks
 5. Dataset statistics and visualization
+6. Support for more Hugging Face datasets
+7. Automatic dataset discovery from Hugging Face Hub
