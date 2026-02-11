@@ -24,10 +24,16 @@ categories:
 # Dataset configuration
 dataset:
   # Available datasets:
+  # HDF5 datasets (from ann-benchmarks.com):
   # - dbpedia-openai-1M-angular (1M vectors, 1536 dims, cosine)
   # - deep-image-96-angular (10M vectors, 96 dims, cosine)
   # - gist-960-euclidean (1M vectors, 960 dims, euclidean)
   # - glove-100-angular (1.2M vectors, 100 dims, cosine)
+  # 
+  # Hugging Face datasets:
+  # - dbpedia-entities-openai-1M (1M vectors, 1536 dims, cosine)
+  # 
+  # Generated datasets:
   # - synthetic (generated vectors for testing)
   name: "synthetic"
   synthetic:

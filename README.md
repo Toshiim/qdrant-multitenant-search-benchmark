@@ -135,13 +135,25 @@ benchmark:
 
 ## Supported Datasets
 
+### Synthetic Datasets
 | Dataset | Vectors | Dimensions | Distance |
 |---------|---------|------------|----------|
 | synthetic | configurable | configurable | configurable |
+
+### Hugging Face Datasets
+| Dataset | Vectors | Dimensions | Distance | Source |
+|---------|---------|------------|----------|--------|
+| dbpedia-entities-openai-1M | 1M | 1536 | cosine | [KShivendu/dbpedia-entities-openai-1M](https://huggingface.co/datasets/KShivendu/dbpedia-entities-openai-1M) |
+
+### HDF5 Datasets (from ann-benchmarks.com)
+| Dataset | Vectors | Dimensions | Distance |
+|---------|---------|------------|----------|
 | dbpedia-openai-1M-angular | 1M | 1536 | cosine |
 | deep-image-96-angular | 10M | 96 | cosine |
 | gist-960-euclidean | 1M | 960 | euclidean |
 | glove-100-angular | 1.2M | 100 | cosine |
+
+**Note:** HDF5 datasets are downloaded from ann-benchmarks.com which may not be always available. Use Hugging Face datasets for more reliable access.
 
 ## Metrics Collected
 

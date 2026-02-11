@@ -12,6 +12,12 @@ from tqdm import tqdm
 
 from .config import Config
 
+try:
+    from datasets import load_dataset as hf_load_dataset
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+
 
 # Standard benchmark datasets with download URLs
 DATASET_INFO = {
@@ -38,6 +44,17 @@ DATASET_INFO = {
         "num_vectors": 1183514,
         "dimensions": 100,
         "distance": "Cosine",
+    },
+}
+
+# Hugging Face datasets configuration
+HF_DATASET_INFO = {
+    "dbpedia-entities-openai-1M": {
+        "repo_id": "KShivendu/dbpedia-entities-openai-1M",
+        "embedding_column": "openai",  # Column name for embeddings
+        "dimensions": 1536,
+        "distance": "Cosine",
+        "split": "train",
     },
 }
 
@@ -95,6 +112,106 @@ def load_hdf5_dataset(path: str) -> Dataset:
         )
 
 
+def load_huggingface_dataset(
+    repo_id: str,
+    embedding_column: str = "emb",
+    split: str = "train",
+    distance: str = "Cosine",
+    num_queries: int = 1000,
+    query_split: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+) -> Dataset:
+    """Load dataset from Hugging Face Hub.
+    
+    Args:
+        repo_id: Hugging Face dataset repository ID (e.g., "KShivendu/dbpedia-entities-openai-1M")
+        embedding_column: Name of the column containing embeddings
+        split: Dataset split to use for vectors (default: "train")
+        distance: Distance metric ("Cosine" or "Euclidean")
+        num_queries: Number of query vectors to sample from the dataset
+        query_split: Optional separate split for queries (if None, samples from main split)
+        cache_dir: Optional directory to cache downloaded datasets
+    
+    Returns:
+        Dataset object with vectors and queries
+    """
+    if not HF_AVAILABLE:
+        raise ImportError(
+            "The 'datasets' library is not installed. "
+            "Install it with: pip install datasets"
+        )
+    
+    print(f"Loading dataset from Hugging Face: {repo_id}")
+    
+    # Load the dataset
+    dataset = hf_load_dataset(repo_id, split=split, cache_dir=cache_dir)
+    
+    # Extract embeddings
+    embeddings = np.array(dataset[embedding_column])
+    
+    # Convert to float32 if needed
+    if embeddings.dtype != np.float32:
+        embeddings = embeddings.astype(np.float32)
+    
+    # Handle case where embeddings might be lists of lists
+    if len(embeddings.shape) == 1:
+        # Convert list of lists to numpy array efficiently
+        # For large datasets, pre-allocate array to avoid intermediate copies
+        first_emb = np.array(embeddings[0], dtype=np.float32)
+        dimensions = len(first_emb)
+        result = np.empty((len(embeddings), dimensions), dtype=np.float32)
+        result[0] = first_emb
+        for i in range(1, len(embeddings)):
+            result[i] = embeddings[i]
+        embeddings = result
+    
+    dimensions = embeddings.shape[1]
+    
+    # Sample queries
+    if query_split:
+        # Load separate split for queries
+        query_dataset = hf_load_dataset(repo_id, split=query_split, cache_dir=cache_dir)
+        query_embeddings = np.array(query_dataset[embedding_column])
+        if query_embeddings.dtype != np.float32:
+            query_embeddings = query_embeddings.astype(np.float32)
+        if len(query_embeddings.shape) == 1:
+            # Convert efficiently with pre-allocation
+            first_emb = np.array(query_embeddings[0], dtype=np.float32)
+            dims = len(first_emb)
+            result = np.empty((len(query_embeddings), dims), dtype=np.float32)
+            result[0] = first_emb
+            for i in range(1, len(query_embeddings)):
+                result[i] = query_embeddings[i]
+            query_embeddings = result
+        
+        # Use all queries or sample if there are too many
+        if len(query_embeddings) > num_queries:
+            indices = np.random.choice(len(query_embeddings), size=num_queries, replace=False)
+            queries = query_embeddings[indices]
+        else:
+            queries = query_embeddings
+    else:
+        # Sample queries from the main dataset
+        if len(embeddings) > num_queries:
+            indices = np.random.choice(len(embeddings), size=num_queries, replace=False)
+            queries = embeddings[indices]
+        else:
+            # If dataset is smaller than requested queries, use all as queries
+            queries = embeddings.copy()
+    
+    print(f"Loaded {len(embeddings)} vectors with {dimensions} dimensions")
+    print(f"Generated {len(queries)} query vectors")
+    
+    return Dataset(
+        name=repo_id.replace("/", "_"),
+        vectors=embeddings,
+        queries=queries,
+        dimensions=dimensions,
+        distance=distance,
+        neighbors=None,  # No ground truth available by default
+    )
+
+
 def generate_synthetic_dataset(
     num_vectors: int,
     dimensions: int,
@@ -134,8 +251,26 @@ def load_dataset(config: Config, data_dir: str = "./data") -> Dataset:
             distance=config.dataset.synthetic.distance,
         )
     
+    # Check if it's a Hugging Face dataset
+    if dataset_name in HF_DATASET_INFO:
+        info = HF_DATASET_INFO[dataset_name]
+        return load_huggingface_dataset(
+            repo_id=info["repo_id"],
+            embedding_column=info.get("embedding_column", "emb"),
+            split=info.get("split", "train"),
+            distance=info.get("distance", "Cosine"),
+            num_queries=config.benchmark.num_queries,
+            cache_dir=os.path.join(data_dir, "huggingface_cache"),
+        )
+    
+    # Check if it's a standard HDF5 dataset
     if dataset_name not in DATASET_INFO:
-        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASET_INFO.keys())}")
+        raise ValueError(
+            f"Unknown dataset: {dataset_name}. "
+            f"Available HDF5 datasets: {list(DATASET_INFO.keys())}. "
+            f"Available Hugging Face datasets: {list(HF_DATASET_INFO.keys())}. "
+            f"Or use 'synthetic' for generated data."
+        )
     
     info = DATASET_INFO[dataset_name]
     
