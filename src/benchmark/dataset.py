@@ -146,24 +146,41 @@ def load_huggingface_dataset(
     # Load the dataset
     dataset = hf_load_dataset(repo_id, split=split, cache_dir=cache_dir)
     
-    # Extract embeddings
-    embeddings = np.array(dataset[embedding_column])
+    # Extract embeddings with memory-efficient handling
+    print("Extracting embeddings from dataset...")
     
-    # Convert to float32 if needed
-    if embeddings.dtype != np.float32:
-        embeddings = embeddings.astype(np.float32)
+    # Check the type of the first embedding to determine strategy
+    first_item = dataset[0][embedding_column]
     
-    # Handle case where embeddings might be lists of lists
-    if len(embeddings.shape) == 1:
-        # Convert list of lists to numpy array efficiently
-        # For large datasets, pre-allocate array to avoid intermediate copies
-        first_emb = np.array(embeddings[0], dtype=np.float32)
-        dimensions = len(first_emb)
-        result = np.empty((len(embeddings), dimensions), dtype=np.float32)
-        result[0] = first_emb
-        for i in range(1, len(embeddings)):
-            result[i] = embeddings[i]
-        embeddings = result
+    if isinstance(first_item, list):
+        # Embeddings are stored as lists - use memory-efficient batch conversion
+        print(f"Converting {len(dataset)} list embeddings to numpy array (this may take a moment)...")
+        
+        # Get dimensions from first item
+        dimensions = len(first_item)
+        num_items = len(dataset)
+        
+        # Pre-allocate the full array
+        embeddings = np.empty((num_items, dimensions), dtype=np.float32)
+        
+        # Process in batches to show progress and manage memory
+        batch_size = 10000
+        for batch_start in tqdm(range(0, num_items, batch_size), desc="Converting embeddings"):
+            batch_end = min(batch_start + batch_size, num_items)
+            
+            # Extract batch of embeddings as lists
+            batch_lists = [dataset[i][embedding_column] for i in range(batch_start, batch_end)]
+            
+            # Convert batch to numpy and assign
+            embeddings[batch_start:batch_end] = np.array(batch_lists, dtype=np.float32)
+    else:
+        # Embeddings are already numpy arrays - extract directly
+        embeddings = np.array(dataset[embedding_column])
+        
+        # Convert to float32 if needed
+        if embeddings.dtype != np.float32:
+            print("Converting to float32...")
+            embeddings = embeddings.astype(np.float32)
     
     dimensions = embeddings.shape[1]
     
@@ -171,18 +188,27 @@ def load_huggingface_dataset(
     if query_split:
         # Load separate split for queries
         query_dataset = hf_load_dataset(repo_id, split=query_split, cache_dir=cache_dir)
-        query_embeddings = np.array(query_dataset[embedding_column])
-        if query_embeddings.dtype != np.float32:
-            query_embeddings = query_embeddings.astype(np.float32)
-        if len(query_embeddings.shape) == 1:
-            # Convert efficiently with pre-allocation
-            first_emb = np.array(query_embeddings[0], dtype=np.float32)
-            dims = len(first_emb)
-            result = np.empty((len(query_embeddings), dims), dtype=np.float32)
-            result[0] = first_emb
-            for i in range(1, len(query_embeddings)):
-                result[i] = query_embeddings[i]
-            query_embeddings = result
+        
+        # Check query embedding format
+        first_query = query_dataset[0][embedding_column]
+        
+        if isinstance(first_query, list):
+            # Query embeddings are lists - use batch conversion
+            print(f"Converting {len(query_dataset)} query embeddings...")
+            dims = len(first_query)
+            num_queries_total = len(query_dataset)
+            query_embeddings = np.empty((num_queries_total, dims), dtype=np.float32)
+            
+            batch_size = 10000
+            for batch_start in tqdm(range(0, num_queries_total, batch_size), desc="Converting query embeddings"):
+                batch_end = min(batch_start + batch_size, num_queries_total)
+                batch_lists = [query_dataset[i][embedding_column] for i in range(batch_start, batch_end)]
+                query_embeddings[batch_start:batch_end] = np.array(batch_lists, dtype=np.float32)
+        else:
+            # Query embeddings are numpy arrays
+            query_embeddings = np.array(query_dataset[embedding_column])
+            if query_embeddings.dtype != np.float32:
+                query_embeddings = query_embeddings.astype(np.float32)
         
         # Use all queries or sample if there are too many
         if len(query_embeddings) > num_queries:
