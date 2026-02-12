@@ -149,8 +149,9 @@ def load_huggingface_dataset(
     # Extract embeddings with memory-efficient handling using Arrow format
     print("Extracting embeddings from dataset...")
     
-    # Use Arrow column directly for maximum efficiency
-    # This avoids unnecessary Python list → NumPy conversions
+    # NOTE: Accessing _data is using HuggingFace datasets internal API
+    # This provides direct access to underlying Arrow table for performance
+    # May need adjustment if HuggingFace datasets changes internal structure
     arrow_col = dataset._data.column(embedding_column)
     
     # Convert Arrow column to NumPy using efficient to_numpy()
@@ -173,8 +174,9 @@ def load_huggingface_dataset(
         else:
             # Already a proper numeric array
             embeddings = embeddings_raw.astype(np.float32) if embeddings_raw.dtype != np.float32 else embeddings_raw
-    except Exception as e:
+    except (AttributeError, ValueError, TypeError) as e:
         # Fallback to original method if Arrow conversion fails
+        # This handles cases where Arrow API is unavailable or data format is unexpected
         print(f"Arrow conversion failed ({e}), using fallback method...")
         first_item = dataset[0][embedding_column]
         dimensions = len(first_item) if isinstance(first_item, (list, tuple)) else 0
@@ -195,6 +197,7 @@ def load_huggingface_dataset(
         query_dataset = hf_load_dataset(repo_id, split=query_split, cache_dir=cache_dir)
         
         # Use Arrow column for efficient conversion
+        # NOTE: Using internal _data API for performance (see note above)
         query_arrow_col = query_dataset._data.column(embedding_column)
         
         try:
@@ -205,8 +208,9 @@ def load_huggingface_dataset(
                 query_embeddings = np.array(query_embeddings_list, dtype=np.float32)
             else:
                 query_embeddings = query_embeddings_raw.astype(np.float32) if query_embeddings_raw.dtype != np.float32 else query_embeddings_raw
-        except Exception:
-            # Fallback method
+        except (AttributeError, ValueError, TypeError) as e:
+            # Fallback method if Arrow conversion is unavailable
+            print(f"Arrow query conversion failed ({e}), using fallback...")
             query_embeddings_list = [query_dataset[i][embedding_column] for i in range(len(query_dataset))]
             query_embeddings = np.array(query_embeddings_list, dtype=np.float32)
         
