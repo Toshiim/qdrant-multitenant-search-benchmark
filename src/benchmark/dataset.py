@@ -146,41 +146,48 @@ def load_huggingface_dataset(
     # Load the dataset
     dataset = hf_load_dataset(repo_id, split=split, cache_dir=cache_dir)
     
-    # Extract embeddings with memory-efficient handling
+    # Extract embeddings with memory-efficient handling using Arrow format
     print("Extracting embeddings from dataset...")
     
-    # Check the type of the first embedding to determine strategy
-    first_item = dataset[0][embedding_column]
+    # NOTE: Accessing _data is using HuggingFace datasets internal API
+    # This provides direct access to underlying Arrow table for performance
+    # May need adjustment if HuggingFace datasets changes internal structure
+    arrow_col = dataset._data.column(embedding_column)
     
-    if isinstance(first_item, list):
-        # Embeddings are stored as lists - use memory-efficient batch conversion
-        print(f"Converting {len(dataset)} list embeddings to numpy array (this may take a moment)...")
-        
-        # Get dimensions from first item
-        dimensions = len(first_item)
+    # Convert Arrow column to NumPy using efficient to_numpy()
+    # For list-type columns, Arrow handles the conversion efficiently
+    print(f"Converting {len(dataset)} embeddings using Arrow to_numpy()...")
+    
+    # to_numpy() with zero_copy_only=False handles nested lists efficiently
+    try:
+        embeddings_raw = arrow_col.to_numpy(zero_copy_only=False)
+        # If it's an object array (list of lists), convert to proper 2D array
+        if embeddings_raw.dtype == object:
+            # Get dimensions from first item
+            dimensions = len(embeddings_raw[0]) if len(embeddings_raw) > 0 else 0
+            num_items = len(embeddings_raw)
+            
+            # Use Arrow's to_pylist for faster conversion
+            print(f"Converting nested Arrow list column to numpy array...")
+            embeddings_list = arrow_col.to_pylist()
+            embeddings = np.array(embeddings_list, dtype=np.float32)
+        else:
+            # Already a proper numeric array
+            embeddings = embeddings_raw.astype(np.float32) if embeddings_raw.dtype != np.float32 else embeddings_raw
+    except (AttributeError, ValueError, TypeError) as e:
+        # Fallback to original method if Arrow conversion fails
+        # This handles cases where Arrow API is unavailable or data format is unexpected
+        print(f"Arrow conversion failed ({e}), using fallback method...")
+        first_item = dataset[0][embedding_column]
+        dimensions = len(first_item) if isinstance(first_item, (list, tuple)) else 0
         num_items = len(dataset)
         
-        # Pre-allocate the full array
         embeddings = np.empty((num_items, dimensions), dtype=np.float32)
-        
-        # Process in batches to show progress and manage memory
         batch_size = 10000
         for batch_start in tqdm(range(0, num_items, batch_size), desc="Converting embeddings"):
             batch_end = min(batch_start + batch_size, num_items)
-            
-            # Extract batch of embeddings as lists
             batch_lists = [dataset[i][embedding_column] for i in range(batch_start, batch_end)]
-            
-            # Convert batch to numpy and assign
             embeddings[batch_start:batch_end] = np.array(batch_lists, dtype=np.float32)
-    else:
-        # Embeddings are already numpy arrays - extract directly
-        embeddings = np.array(dataset[embedding_column])
-        
-        # Convert to float32 if needed
-        if embeddings.dtype != np.float32:
-            print("Converting to float32...")
-            embeddings = embeddings.astype(np.float32)
     
     dimensions = embeddings.shape[1]
     
@@ -189,26 +196,23 @@ def load_huggingface_dataset(
         # Load separate split for queries
         query_dataset = hf_load_dataset(repo_id, split=query_split, cache_dir=cache_dir)
         
-        # Check query embedding format
-        first_query = query_dataset[0][embedding_column]
+        # Use Arrow column for efficient conversion
+        # NOTE: Using internal _data API for performance (see note above)
+        query_arrow_col = query_dataset._data.column(embedding_column)
         
-        if isinstance(first_query, list):
-            # Query embeddings are lists - use batch conversion
-            print(f"Converting {len(query_dataset)} query embeddings...")
-            dims = len(first_query)
-            num_items = len(query_dataset)
-            query_embeddings = np.empty((num_items, dims), dtype=np.float32)
-            
-            batch_size = 10000
-            for batch_start in tqdm(range(0, num_items, batch_size), desc="Converting query embeddings"):
-                batch_end = min(batch_start + batch_size, num_items)
-                batch_lists = [query_dataset[i][embedding_column] for i in range(batch_start, batch_end)]
-                query_embeddings[batch_start:batch_end] = np.array(batch_lists, dtype=np.float32)
-        else:
-            # Query embeddings are numpy arrays
-            query_embeddings = np.array(query_dataset[embedding_column])
-            if query_embeddings.dtype != np.float32:
-                query_embeddings = query_embeddings.astype(np.float32)
+        try:
+            query_embeddings_raw = query_arrow_col.to_numpy(zero_copy_only=False)
+            if query_embeddings_raw.dtype == object:
+                # Use Arrow's to_pylist for faster conversion
+                query_embeddings_list = query_arrow_col.to_pylist()
+                query_embeddings = np.array(query_embeddings_list, dtype=np.float32)
+            else:
+                query_embeddings = query_embeddings_raw.astype(np.float32) if query_embeddings_raw.dtype != np.float32 else query_embeddings_raw
+        except (AttributeError, ValueError, TypeError) as e:
+            # Fallback method if Arrow conversion is unavailable
+            print(f"Arrow query conversion failed ({e}), using fallback...")
+            query_embeddings_list = [query_dataset[i][embedding_column] for i in range(len(query_dataset))]
+            query_embeddings = np.array(query_embeddings_list, dtype=np.float32)
         
         # Use all queries or sample if there are too many
         if len(query_embeddings) > num_queries:
