@@ -196,12 +196,12 @@ def load_huggingface_dataset(
             # Query embeddings are lists - use batch conversion
             print(f"Converting {len(query_dataset)} query embeddings...")
             dims = len(first_query)
-            num_queries_total = len(query_dataset)
-            query_embeddings = np.empty((num_queries_total, dims), dtype=np.float32)
+            num_items = len(query_dataset)
+            query_embeddings = np.empty((num_items, dims), dtype=np.float32)
             
             batch_size = 10000
-            for batch_start in tqdm(range(0, num_queries_total, batch_size), desc="Converting query embeddings"):
-                batch_end = min(batch_start + batch_size, num_queries_total)
+            for batch_start in tqdm(range(0, num_items, batch_size), desc="Converting query embeddings"):
+                batch_end = min(batch_start + batch_size, num_items)
                 batch_lists = [query_dataset[i][embedding_column] for i in range(batch_start, batch_end)]
                 query_embeddings[batch_start:batch_end] = np.array(batch_lists, dtype=np.float32)
         else:

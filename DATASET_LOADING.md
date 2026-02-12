@@ -307,7 +307,7 @@ All datasets are downloaded from ann-benchmarks.com (using HTTP URLs as provided
 **For the dbpedia-entities-openai-1M dataset** (1M × 1536 dimensions):
 - Raw data size: ~6 GB (as float32)
 - Expected peak memory during loading: ~8-10 GB (with batch conversion)
-- Previous memory usage (without fix): 20-30+ GB due to inefficient list handling
+- Previous memory usage (without fix): ~24+ GB due to inefficient list handling
 
 ## Error Handling
 
